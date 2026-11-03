@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, canSignOff, canWriteDept, onError, onSignedOut, type Me } from "./api.js";
 import { TXT, type Lang, type T } from "./i18n.js";
+import { ControlsChart, DepartmentChart, PipelineChart, RiskChart, type Overview } from "./Charts.js";
 import { Login } from "./Login.js";
 import { TourPlayer } from "./Tour.js";
 import { TOURS, type Page, type Tour } from "./tours.js";
@@ -21,18 +22,19 @@ export function App() {
   const [depts, setDepts] = useState<Dept[]>([]);
   const [acts, setActs] = useState<Activity[]>([]);
   const [dash, setDash] = useState<DashRow[]>([]);
+  const [overview, setOverview] = useState<Overview | null>(null);
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [tour, setTour] = useState<Tour | null>(null);
   const t = TXT[lang];
 
   const loadMe = useCallback(() => api<Me>("/api/auth/me").then(setMe).catch(() => setMe(null)), []);
   const load = useCallback(async () => {
-    const [d, a, s] = await Promise.all([api<Dept[]>("/api/departments"), api<Activity[]>("/api/activities"), api<DashRow[]>("/api/dashboard")]);
-    setDepts(d); setActs(a); setDash(s);
+    const [d, a, s, o] = await Promise.all([api<Dept[]>("/api/departments"), api<Activity[]>("/api/activities"), api<DashRow[]>("/api/dashboard"), api<Overview>("/api/overview")]);
+    setDepts(d); setActs(a); setDash(s); setOverview(o);
   }, []);
   useEffect(() => { onError(setError); onSignedOut(() => setMe(null)); loadMe(); }, [loadMe]);
   useEffect(() => { // forget the previous person's data as soon as they sign out
-    if (me === null) { setActs([]); setDash([]); setDepts([]); setCriteria([]); setTour(null); setOpen(null); setPage("dashboard"); }
+    if (me === null) { setActs([]); setDash([]); setOverview(null); setDepts([]); setCriteria([]); setTour(null); setOpen(null); setPage("dashboard"); }
   }, [me]);
   useEffect(() => { if (me) { load().catch(() => {}); api<Criterion[]>("/api/criteria").then(setCriteria).catch(() => {}); } }, [me?.user.id, load]);
 
@@ -77,7 +79,7 @@ export function App() {
         </header>
         {error && <div role="alert" className="flex items-center justify-between bg-red-500/15 px-6 py-2 text-sm text-red-600">{error}<button onClick={() => setError("")} aria-label="Close">×</button></div>}
         <div className="mx-auto max-w-5xl space-y-6 p-6">
-          {page === "dashboard" && <Dashboard rows={dash} t={t} me={me} tourAct={tourAct} go={(id) => { setPage("processes"); setOpen(id); }} startWelcome={() => play(TOURS[0])} />}
+          {page === "dashboard" && <Dashboard rows={dash} overview={overview} t={t} me={me} tourAct={tourAct} go={(id) => { setPage("processes"); setOpen(id); }} startWelcome={() => play(TOURS[0])} />}
           {page === "processes" && open === null && <List acts={acts} dash={dash} depts={depts} me={me} t={t} tourAct={tourAct} reload={load} go={setOpen} />}
           {page === "processes" && activity && <Detail key={open} act={activity} me={me} criteria={criteria} lang={lang} t={t} reload={load} back={() => setOpen(null)} />}
           {page === "tutorials" && <Tutorials me={me} lang={lang} t={t} play={play} />}
@@ -88,7 +90,7 @@ export function App() {
   );
 }
 
-function Dashboard({ rows, t, me, tourAct, go, startWelcome }: { rows: DashRow[]; t: T; me: Me; tourAct: number | null; go: (id: number) => void; startWelcome: () => void }) {
+function Dashboard({ rows, overview, t, me, tourAct, go, startWelcome }: { rows: DashRow[]; overview: Overview | null; t: T; me: Me; tourAct: number | null; go: (id: number) => void; startWelcome: () => void }) {
   const [dismissed, setDismissed] = useState(() => { try { return sessionStorage.getItem("tourDismissed") === "1"; } catch { return false; } });
   const stats = [[t.total, rows.length], [t.needDpia, rows.filter((r) => r.dpiaRequired).length],
     [t.openCtl, rows.reduce((n, r) => n + r.openControls, 0)], [t.consult, rows.filter((r) => r.consultation).length]];
@@ -99,6 +101,10 @@ function Dashboard({ rows, t, me, tourAct, go, startWelcome }: { rows: DashRow[]
         <Btn onClick={startWelcome}>{t.tourStart}</Btn></span></Card>}
     <div data-tour="stats" className="grid grid-cols-2 gap-4 lg:grid-cols-4">{stats.map(([l, v]) =>
       <Card key={l as string}><div className="text-sm text-muted-foreground">{l}</div><div className="mt-2 text-3xl font-semibold">{v}</div></Card>)}</div>
+    {overview && <div data-tour="charts" className="grid gap-4 lg:grid-cols-2">
+      <PipelineChart o={overview} t={t} /><ControlsChart o={overview} t={t} />
+      <RiskChart o={overview} t={t} className="lg:col-span-2" /><DepartmentChart o={overview} t={t} className="lg:col-span-2" />
+    </div>}
     <Card data-tour="table" className="overflow-x-auto p-0">
       <table className="w-full text-sm">
         <thead><tr className="border-b text-left text-muted-foreground">{[t.name, t.dept, t.dpia, t.risks, t.openCtl, t.status].map((h) => <th key={h} className="px-4 py-3 font-medium">{h}</th>)}</tr></thead>

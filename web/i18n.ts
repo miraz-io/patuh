@@ -23,6 +23,17 @@ const en = {
   tourPrompt: "New here? Take a 2-minute guided tour of Patuh.", tourStart: "Start the tour", tourLater: "Not now",
   next: "Next", prev: "Back", finish: "Finish", skip: "Close", tryIt: "Your turn: click the highlighted item.",
   demoBanner: "Demo data",
+  charts: {
+    view: { chart: "Chart", table: "Table" },
+    journey: "DPIA journey", journeySub: "How many processes reach each stage. Each stage is a subset of the one before.",
+    stages: { registered: "Registered", required: "DPIA required", assessed: "Risks assessed", complete: "Controls complete", signed: "Signed off" },
+    risk: "Risk before and after controls", riskSub: "Every risk sits in a cell by likelihood and severity. Darker cell = more risks. Compare the two grids to see what your controls achieved.",
+    before: "Before controls", after: "After controls", likelihood: "Likelihood", severity: "Severity", lower: "Lower risk", higher: "Higher risk",
+    controls: "Controls", controlsSub: "How far the planned measures have come.", planned: "Planned", inProgress: "In progress", done: "Done",
+    dept: "Residual risk by department", deptSub: "Each process counted at its highest remaining risk after controls.",
+    level: { low: "Low", medium: "Medium", "very-high": "Very high", high: "High", none: "No risks recorded" },
+    processes: "processes", risksWord: "risks", controlsWord: "controls", cell: "Likelihood {l}, severity {s}", empty: "Nothing to show yet.",
+  },
 };
 
 const id: typeof en = {
@@ -47,6 +58,17 @@ const id: typeof en = {
   tourPrompt: "Baru di sini? Ikuti tur 2 menit untuk mengenal Patuh.", tourStart: "Mulai tur", tourLater: "Nanti",
   next: "Lanjut", prev: "Kembali", finish: "Selesai", skip: "Tutup", tryIt: "Giliran Anda: klik bagian yang disorot.",
   demoBanner: "Data demo",
+  charts: {
+    view: { chart: "Grafik", table: "Tabel" },
+    journey: "Perjalanan DPIA", journeySub: "Berapa proses yang mencapai tiap tahap. Setiap tahap adalah bagian dari tahap sebelumnya.",
+    stages: { registered: "Terdaftar", required: "Perlu DPIA", assessed: "Risiko dinilai", complete: "Kontrol selesai", signed: "Disahkan" },
+    risk: "Risiko sebelum dan sesudah kontrol", riskSub: "Setiap risiko berada di satu sel menurut kemungkinan dan dampak. Sel lebih gelap = lebih banyak risiko. Bandingkan kedua kisi untuk melihat hasil kontrol Anda.",
+    before: "Sebelum kontrol", after: "Sesudah kontrol", likelihood: "Kemungkinan", severity: "Dampak", lower: "Risiko lebih rendah", higher: "Risiko lebih tinggi",
+    controls: "Kontrol", controlsSub: "Sejauh mana langkah yang direncanakan berjalan.", planned: "Direncanakan", inProgress: "Berjalan", done: "Selesai",
+    dept: "Risiko residual per departemen", deptSub: "Setiap proses dihitung pada risiko tertinggi yang tersisa setelah kontrol.",
+    level: { low: "Rendah", medium: "Sedang", "very-high": "Sangat tinggi", high: "Tinggi", none: "Belum ada risiko" },
+    processes: "proses", risksWord: "risiko", controlsWord: "kontrol", cell: "Kemungkinan {l}, dampak {s}", empty: "Belum ada yang ditampilkan.",
+  },
 };
 
 export const TXT = { en, id };

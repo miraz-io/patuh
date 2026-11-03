@@ -11,6 +11,7 @@ import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, 
   isLocked, recordFail, userForSession, verifyPassword, type User } from "./auth.js";
 import { finishLogin, startLogin, userForSso, type OidcConfig } from "./oidc.js";
 import { demoLoaded } from "./demo.js";
+import { buildOverview, type OvActivity, type OvControl, type OvRisk } from "../core/overview.js";
 import { SIGNOFF_FIELDS, cleanActivity, date, text } from "./validate.js";
 
 type Env = { Variables: { user: User } };
@@ -253,6 +254,16 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
       const residual = risks.map((r) => riskLevel(r.residual_likelihood ?? r.likelihood, r.residual_severity ?? r.severity).level);
       return { id: a.id, name: a.name, department: a.department, dpiaRequired: s.dpiaRequired, basis: s.basis, risks: risks.length, openControls: open, consultation: needsPriorConsultation(residual) };
     }));
+  });
+
+  // Numbers for the dashboard charts, limited to what this person may see.
+  app.get("/api/overview", (c) => {
+    const u = c.get("user"), everything = u.role === "member" ? 0 : 1, dept = u.department_id ?? -1;
+    const acts = all(db, "SELECT a.id,a.screening,a.signed_by,d.name AS department FROM activities a JOIN departments d ON d.id=a.department_id WHERE ?=1 OR a.department_id=?", everything, dept)
+      .map((a): OvActivity => ({ id: a.id as number, department: a.department as string, screening: JSON.parse(a.screening as string), signed: (a.signed_by as string).trim() !== "" }));
+    const risks = all(db, "SELECT r.id,r.activity_id,r.likelihood,r.severity,r.residual_likelihood,r.residual_severity FROM risks r JOIN activities a ON a.id=r.activity_id WHERE ?=1 OR a.department_id=?", everything, dept) as unknown as OvRisk[];
+    const controls = all(db, "SELECT k.risk_id,k.status FROM controls k JOIN risks r ON r.id=k.risk_id JOIN activities a ON a.id=r.activity_id WHERE ?=1 OR a.department_id=?", everything, dept) as unknown as OvControl[];
+    return c.json(buildOverview(acts, risks, controls));
   });
 
   return app;

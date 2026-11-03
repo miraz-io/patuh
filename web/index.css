@@ -1,19 +1,17 @@
 @import "tailwindcss";
 
-/* shadcn/ui "neutral" tokens, so the look matches the shadcn dashboard example */
+/* shadcn/ui "neutral" tokens, light only */
 :root {
-  --background: oklch(1 0 0); --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0); --muted: oklch(0.97 0 0); --muted-foreground: oklch(0.556 0 0);
+  color-scheme: light;
+  --background: oklch(0.985 0 0); --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0); --muted: oklch(0.965 0 0); --muted-foreground: oklch(0.5 0 0);
   --border: oklch(0.922 0 0); --primary: oklch(0.205 0 0); --primary-foreground: oklch(0.985 0 0);
   --ring: oklch(0.708 0 0); --radius: 0.625rem;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: oklch(0.145 0 0); --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0); --muted: oklch(0.269 0 0); --muted-foreground: oklch(0.708 0 0);
-    --border: oklch(1 0 0 / 10%); --primary: oklch(0.922 0 0); --primary-foreground: oklch(0.205 0 0);
-    --ring: oklch(0.556 0 0);
-  }
+
+  /* chart colours: one blue ramp (validated, ordinal), fixed status colours, recessive chrome */
+  --viz-250: #86b6ef; --viz-350: #5598e7; --viz-450: #2a78d6; --viz-550: #1c5cab; --viz-650: #104281;
+  --viz-good: #0ca30c; --viz-warning: #fab219; --viz-serious: #ec835a; --viz-critical: #d03b3b; --viz-none: #c3c2b7;
+  --viz-grid: #e1e0d9; --viz-ink-on-dark: #ffffff; --viz-ink-on-light: #0b0b0b;
 }
 @theme inline {
   --color-background: var(--background); --color-foreground: var(--foreground);
@@ -22,5 +20,5 @@
   --color-primary-foreground: var(--primary-foreground); --color-ring: var(--ring);
   --radius-lg: var(--radius);
 }
-body { background: var(--background); color: var(--foreground); font-family: ui-sans-serif, system-ui, sans-serif; }
+body { background: var(--background); color: var(--foreground); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 * { border-color: var(--border); }
