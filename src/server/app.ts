@@ -1,14 +1,15 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import type { DatabaseSync } from "node:sqlite";
 import { CRITERIA, screen } from "../core/screening.js";
 import { needsPriorConsultation, riskLevel } from "../core/risk.js";
 import { dpiaBuffer, type Activity, type Lang, type RiskRow } from "../core/dpia.js";
 import { createActivity, getSetting, updateActivity } from "./db.js";
-import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, createSession, createUser, endSession, findUserByEmail,
+import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, createSession, endSession, findUserByEmail,
   isLocked, recordFail, userForSession, verifyPassword, type User } from "./auth.js";
-import { finishLogin, startLogin, type OidcConfig } from "./oidc.js";
+import { finishLogin, startLogin, userForSso, type OidcConfig } from "./oidc.js";
 import { demoLoaded } from "./demo.js";
 import { SIGNOFF_FIELDS, cleanActivity, date, text } from "./validate.js";
 
@@ -26,12 +27,15 @@ const int = (v: string) => (/^\d{1,9}$/.test(v) ? Number(v) : NaN);
 export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
   const app = new Hono<Env>();
   const oidc = opts.oidc ?? null;
+  let hashing = 0;
   const cookieOpts = { httpOnly: true, sameSite: "Lax" as const, secure: !!opts.secureCookies, path: "/" };
 
   app.use("*", secureHeaders({
     contentSecurityPolicy: { defaultSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", "data:"], frameAncestors: ["'none'"], formAction: ["'self'"], baseUri: ["'self'"] },
     referrerPolicy: "no-referrer", xFrameOptions: "DENY",
   }));
+
+  app.use("/api/*", bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.json({ error: "Request too large" }, 413) }));
 
   // CSRF: a browser cannot add this header to a cross-site request without a CORS preflight, which we never allow.
   app.use("/api/*", async (c, next) => {
@@ -43,7 +47,8 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     await next();
     if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return;
     const user = c.get("user");
-    db.prepare("INSERT INTO audit_log (email,method,path,status) VALUES (?,?,?,?)").run(user?.email ?? "", c.req.method, new URL(c.req.url).pathname, c.res.status);
+    if (!user) return; // anonymous noise (401s, scans) is not worth a row; successful sign-ins are logged explicitly below
+    db.prepare("INSERT INTO audit_log (email,method,path,status) VALUES (?,?,?,?)").run(user.email, c.req.method, new URL(c.req.url).pathname.slice(0, 200), c.res.status);
   });
 
   // ---------- public: sign-in ----------
@@ -55,11 +60,17 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (!email || !password) return err(c, 400, "email and password required");
     const key = email.trim().toLowerCase();
     if (isLocked(key)) return err(c, 429, "Too many attempts. Try again in 15 minutes.");
+    // ponytail: global cap on concurrent password checks (each costs ~32 MB). Add a per-IP limit at your reverse proxy.
+    if (hashing >= 8) return err(c, 429, "Server busy, try again shortly");
+    recordFail(key); // count the attempt BEFORE the slow check, so a burst of parallel guesses cannot all slip past the limit
+    hashing++;
+    let ok: boolean;
     const user = findUserByEmail(db, email);
-    const ok = await verifyPassword(password, user?.password_hash ?? null); // same work whether or not the user exists
-    if (!user || !ok || user.disabled) { recordFail(key); return err(c, 401, "Wrong email or password"); }
+    try { ok = await verifyPassword(password, user?.password_hash ?? null); } finally { hashing--; } // same work whether or not the user exists
+    if (!user || !ok || user.disabled) return err(c, 401, "Wrong email or password");
     clearFails(key);
     setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts, maxAge: SESSION_MS / 1000 });
+    db.prepare("INSERT INTO audit_log (email,method,path,status) VALUES (?,?,?,?)").run(user.email, "POST", "/api/auth/login", 200);
     return c.json({ ok: true });
   });
 
@@ -86,12 +97,8 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (!state || !code || bound !== state) return c.redirect("/?sso_error=1");
     try {
       const id = await finishLogin(db, oidc, code, state);
-      let user = findUserByEmail(db, id.email);
-      if (!user && oidc.autoCreate) { // new SSO users get no access until an admin assigns a department
-        await createUser(db, { email: id.email, name: id.name, role: "member", departmentId: null }).catch(() => undefined);
-        user = findUserByEmail(db, id.email);
-      }
-      if (!user || user.disabled) return c.redirect("/?sso_error=denied");
+      const user = userForSso(db, id); // only users created with `user add --sso`, bound to this provider account
+      if (!user) return c.redirect("/?sso_error=denied");
       setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts, maxAge: SESSION_MS / 1000 });
       db.prepare("INSERT INTO audit_log (email,method,path,status) VALUES (?,?,?,?)").run(user.email, "GET", "/api/auth/oidc/callback", 302);
       return c.redirect("/");
@@ -109,14 +116,16 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
   app.get("/api/auth/me", (c) => {
     const user = c.get("user");
     const demo = demoLoaded(db);
-    const tour = demo ? one(db, "SELECT id FROM activities WHERE demo=1 ORDER BY id LIMIT 1") : undefined;
-    return c.json({ user, org: getSetting(db, "org_name") ?? "", demo, tourActivityId: tour?.id ?? null,
+    const tour = demo ? one(db, "SELECT id,department_id FROM activities WHERE demo=1 ORDER BY id LIMIT 1") : undefined;
+    const tourId = tour && canRead(user, tour.department_id as number) ? tour.id : null;
+    return c.json({ user, org: getSetting(db, "org_name") ?? "", demo, tourActivityId: tourId,
       completedTours: all(db, "SELECT tour_id FROM tutorial_progress WHERE user_id=?", user.id).map((r) => r.tour_id) });
   });
 
   app.post("/api/tutorials/:id/complete", (c) => {
     const id = c.req.param("id");
     if (!/^[a-z0-9-]{1,40}$/.test(id)) return err(c, 400, "bad tutorial id");
+    if ((one(db, "SELECT COUNT(*) n FROM tutorial_progress WHERE user_id=?", c.get("user").id)!.n as number) >= 50) return err(c, 400, "too many tutorials");
     db.prepare("INSERT OR IGNORE INTO tutorial_progress (user_id,tour_id) VALUES (?,?)").run(c.get("user").id, id);
     return c.json({ ok: true });
   });
@@ -163,6 +172,8 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     const b = await body(c); if (!isObj(b)) return err(c, 400, "invalid json");
     const v = cleanActivity(b); if ("error" in v) return err(c, 400, v.error);
     if (SIGNOFF_FIELDS.some((f) => f in v.value) && !canSignOff(u)) return err(c, 403, "Only an admin or DPO can fill in the sign-off fields");
+    // A change by someone who cannot sign off withdraws an earlier sign-off: the DPO signed the old content.
+    if (!canSignOff(u) && Object.keys(v.value).length) v.value.signed_by = "";
     updateActivity(db, id, v.value);
     return c.json({ ok: true });
   });

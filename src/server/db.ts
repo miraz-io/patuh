@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 const SCHEMA = `
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL CHECK (role IN ('admin','dpo','member','auditor')),
   department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
   password_hash TEXT, -- NULL = single sign-on only
+  sso_sub TEXT, -- issuer|subject of the identity provider account bound to this user
   disabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);
@@ -52,10 +53,17 @@ CREATE TABLE IF NOT EXISTS tutorial_progress (
 `;
 
 export function openDb(path: string): DatabaseSync {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path);
+  if (path !== ":memory:") { try { chmodSync(path, 0o600); } catch { /* not supported on this platform */ } } // the file holds every DPIA: owner only
   db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
   db.exec(SCHEMA);
+  // Upgrade older databases: CREATE TABLE IF NOT EXISTS never adds columns to tables that already exist.
+  const addColumn = (table: string, column: string, ddl: string) => {
+    if (!(db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  };
+  addColumn("departments", "demo", "INTEGER NOT NULL DEFAULT 0");
+  addColumn("activities", "demo", "INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 

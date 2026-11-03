@@ -48,6 +48,8 @@ async function newPassword(): Promise<string> {
   if (a !== b) throw new Error("Passwords do not match");
   return a;
 }
+const otherActiveAdmins = (db: DatabaseSync, exceptId: number) =>
+  (db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin' AND disabled=0 AND id!=?").get(exceptId) as { n: number }).n;
 const deptId = (db: DatabaseSync, name?: string): number | null => {
   if (!name) return null;
   const d = db.prepare("SELECT id FROM departments WHERE name=? COLLATE NOCASE").get(name) as { id: number } | undefined;
@@ -96,13 +98,13 @@ export async function run(argv: string[]): Promise<void> {
     if (!u) throw new Error("No such user");
     if (sub === "passwd") { await setPassword(db, email, await newPassword()); return console.log("Password changed. The user is signed out everywhere."); }
     if (sub === "disable" || sub === "enable") {
-      if (sub === "disable" && u.role === "admin" && (db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin' AND disabled=0").get() as { n: number }).n <= 1) throw new Error("Cannot disable the last active admin");
+      if (sub === "disable" && otherActiveAdmins(db, u.id) === 0 && u.role === "admin" && !u.disabled) throw new Error("Cannot disable the last active admin");
       db.prepare("UPDATE users SET disabled=? WHERE id=?").run(sub === "disable" ? 1 : 0, u.id);
       if (sub === "disable") db.prepare("DELETE FROM sessions WHERE user_id=?").run(u.id);
       return console.log(`User ${sub}d.`);
     }
     if (sub === "remove") {
-      if (u.role === "admin" && (db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin'").get() as { n: number }).n <= 1) throw new Error("Cannot remove the last admin");
+      if (u.role === "admin" && otherActiveAdmins(db, u.id) === 0) throw new Error("Cannot remove the last active admin");
       db.prepare("DELETE FROM users WHERE id=?").run(u.id); return console.log("User removed.");
     }
   }

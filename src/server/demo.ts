@@ -144,8 +144,9 @@ export function removeDemo(db: DatabaseSync): void {
   db.exec("BEGIN");
   try {
     db.prepare("DELETE FROM activities WHERE demo=1").run();
-    db.prepare("DELETE FROM departments WHERE demo=1 AND id NOT IN (SELECT department_id FROM activities)").run();
-    db.prepare("UPDATE departments SET demo=0 WHERE demo=1").run(); // departments that still hold real work become real
+    db.prepare(`DELETE FROM departments WHERE demo=1 AND id NOT IN (SELECT department_id FROM activities)
+      AND id NOT IN (SELECT department_id FROM users WHERE department_id IS NOT NULL)`).run(); // never cut real members off
+    db.prepare("UPDATE departments SET demo=0 WHERE demo=1").run(); // departments that still hold real work or people become real
     db.prepare("DELETE FROM tutorial_progress").run();
     setSetting(db, "demo_loaded", "0");
     db.exec("COMMIT");

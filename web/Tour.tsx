@@ -20,9 +20,13 @@ export function TourPlayer({ tour, lang, show, onClose }: { tour: Tour; lang: La
   const [clicking, setClicking] = useState(false);
   const [back, setBack] = useState(false); // arrived by pressing Back: do not auto-click again, or the user could never go back
   const step = tour.steps[i], last = i === tour.steps.length - 1;
-  const auto = !!step.click && !back; // the cursor drives this step
+  const [missing, setMissing] = useState(false); // the step's target never appeared (e.g. an empty workspace): plain Next instead
+  const auto = !!step.click && !back && !missing; // the cursor drives this step
+  const waits = !!step.wait && !missing; // the user must click the highlighted item
+  const autoRef = useRef(false); autoRef.current = auto;
   const el = useRef<HTMLElement | null>(null);
   const iRef = useRef(0); iRef.current = i;
+  useEffect(() => setMissing(false), [i]);
 
   const go = useCallback((n: number) => {
     if (n < 0) return;
@@ -46,12 +50,12 @@ export function TourPlayer({ tour, lang, show, onClose }: { tour: Tour; lang: La
           found.scrollIntoView({ block: tall ? "start" : "center", behavior: "smooth" });
           const loop = () => { if (dead || !el.current) return; const r = toRect(el.current); setRect((p) => (same(p, r) ? p : r)); raf = requestAnimationFrame(loop); };
           raf = requestAnimationFrame(loop);
-          const r = toRect(found);
-          timers.push(window.setTimeout(() => setCursor({ x: r.left + Math.min(r.width / 2, 160), y: r.top + Math.min(r.height / 2, 36) }), 350));
-          if (auto) {
-            timers.push(window.setTimeout(() => setClicking(true), 1300));
-            timers.push(window.setTimeout(() => { found.click(); }, 1500));
-            timers.push(window.setTimeout(() => go(i + 1), 2500));
+          // read the position after the smooth scroll has mostly finished, not before
+          timers.push(window.setTimeout(() => { const r = toRect(found); setCursor({ x: r.left + Math.min(r.width / 2, 160), y: r.top + Math.min(r.height / 2, 36) }); }, 650));
+          if (autoRef.current) {
+            timers.push(window.setTimeout(() => setClicking(true), 1800));
+            timers.push(window.setTimeout(() => { found.click(); }, 2000));
+            timers.push(window.setTimeout(() => go(i + 1), 3000));
           }
           if (step.wait) {
             const onClick = () => timers.push(window.setTimeout(() => go(i + 1), 250));
@@ -60,20 +64,20 @@ export function TourPlayer({ tour, lang, show, onClose }: { tour: Tour; lang: La
           }
         }
       } else if (Date.now() - t0 < 4000) timers.push(window.setTimeout(poll, 60));
-      // target never appeared: fall back to a centred note instead of blocking the tour
+      else setMissing(true); // target never appeared: show a centred note with a normal Next instead of blocking the tour
     };
     timers.push(window.setTimeout(poll, 120));
     return () => { dead = true; timers.forEach(clearTimeout); cancelAnimationFrame(raf); off(); };
-  }, [i, step, auto, show, go]);
+  }, [i, step, show, go]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose(false);
-      else if (!auto && !step.wait && (e.key === "ArrowRight" || e.key === "Enter")) go(i + 1);
+      else if (!auto && !waits && e.key === "ArrowRight") go(i + 1); // not Enter: a focused Next button already handles it
       else if (e.key === "ArrowLeft") go(i - 1);
     };
     addEventListener("keydown", key); return () => removeEventListener("keydown", key);
-  }, [i, step, auto, go, onClose]);
+  }, [i, auto, waits, go, onClose]);
 
   // Popover position: beside the target when there is room, otherwise docked bottom right.
   const vw = innerWidth, vh = innerHeight;
@@ -86,7 +90,7 @@ export function TourPlayer({ tour, lang, show, onClose }: { tour: Tour; lang: La
     else pos = { left: Math.max(12, Math.min(rect.left, vw - W - 12)), bottom: vh - rect.top + 16 };
   }
   const block = "fixed z-[60]";
-  const guard = step.wait && rect; // on "your turn" steps the highlighted item stays clickable
+  const guard = waits && rect; // on "your turn" steps the highlighted item stays clickable
   return (
     <>
       {rect ? <div className="pointer-events-none fixed z-[55] rounded-lg transition-all duration-300"
@@ -106,12 +110,12 @@ export function TourPlayer({ tour, lang, show, onClose }: { tour: Tour; lang: La
         <div className="mb-1 text-xs text-muted-foreground">{tour.title[lang]} · {i + 1}/{tour.steps.length}</div>
         <div className="font-semibold">{step.title[lang]}</div>
         <p className="mt-1 text-sm text-muted-foreground">{step.body[lang]}</p>
-        {step.wait && <p className="mt-2 text-sm font-medium">{t.tryIt}</p>}
+        {waits && <p className="mt-2 text-sm font-medium">{t.tryIt}</p>}
         <div className="mt-3 flex items-center justify-between">
           <Btn variant="outline" onClick={() => onClose(false)}>{t.skip}</Btn>
           <div className="flex gap-2">
             <Btn variant="outline" disabled={i === 0} onClick={() => go(i - 1)}>{t.prev}</Btn>
-            {!step.wait && !auto && <Btn onClick={() => go(i + 1)}>{last ? t.finish : t.next}</Btn>}
+            {!waits && !auto && <Btn onClick={() => go(i + 1)}>{last ? t.finish : t.next}</Btn>}
           </div>
         </div>
       </div>

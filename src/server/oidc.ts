@@ -3,11 +3,11 @@
 // (Entra ID, Okta, Keycloak, Google, Auth0, Authentik...). ID tokens are verified here, not trusted blindly.
 import { createHash, createPublicKey, randomBytes, verify } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { hashToken } from "./auth.js";
+import { findUserByEmail, hashToken, type User } from "./auth.js";
 
 export type OidcConfig = {
   issuer: string; clientId: string; clientSecret: string; redirectUri: string;
-  allowedDomains: string[]; autoCreate: boolean;
+  allowedDomains: string[];
 };
 
 export function oidcFromEnv(env: Record<string, string | undefined> = process.env): OidcConfig | null {
@@ -20,12 +20,11 @@ export function oidcFromEnv(env: Record<string, string | undefined> = process.en
   return {
     issuer, clientId, clientSecret, redirectUri: `${pub.replace(/\/$/, "")}/api/auth/oidc/callback`,
     allowedDomains: (env.PATUH_OIDC_ALLOWED_DOMAINS ?? "").split(",").map((d) => d.trim().toLowerCase()).filter(Boolean),
-    autoCreate: env.PATUH_OIDC_AUTO_CREATE === "1",
   };
 }
 
 type Jwk = { kid?: string; kty: string; use?: string; [k: string]: unknown };
-type Claims = { iss?: string; aud?: string | string[]; azp?: string; exp?: number; nbf?: number; nonce?: string; email?: string; email_verified?: boolean; name?: string };
+type Claims = { sub?: string; iss?: string; aud?: string | string[]; azp?: string; exp?: number; nbf?: number; nonce?: string; email?: string; email_verified?: boolean; name?: string };
 const b64json = (s: string) => JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
 
 export function verifyIdToken(token: string, jwks: { keys: Jwk[] }, want: { issuer: string; clientId: string; nonce: string; now?: number }): Claims {
@@ -68,6 +67,7 @@ export async function startLogin(db: DatabaseSync, cfg: OidcConfig): Promise<{ u
   const doc = await meta(cfg);
   const state = randomBytes(24).toString("base64url"), nonce = randomBytes(24).toString("base64url"), verifier = randomBytes(48).toString("base64url");
   db.prepare("DELETE FROM oidc_flows WHERE expires_at < ?").run(Date.now());
+  if ((db.prepare("SELECT COUNT(*) n FROM oidc_flows").get() as { n: number }).n >= 1000) throw new Error("Too many pending sign-ins");
   db.prepare("INSERT INTO oidc_flows (state_hash,nonce,verifier,expires_at) VALUES (?,?,?,?)").run(hashToken(state), nonce, verifier, Date.now() + 10 * 60_000);
   const u = new URL(doc.authorization_endpoint);
   u.search = new URLSearchParams({ response_type: "code", client_id: cfg.clientId, redirect_uri: cfg.redirectUri, scope: "openid email profile",
@@ -75,7 +75,7 @@ export async function startLogin(db: DatabaseSync, cfg: OidcConfig): Promise<{ u
   return { url: u.toString(), state };
 }
 
-export async function finishLogin(db: DatabaseSync, cfg: OidcConfig, code: string, state: string): Promise<{ email: string; name: string }> {
+export async function finishLogin(db: DatabaseSync, cfg: OidcConfig, code: string, state: string): Promise<{ email: string; name: string; sub: string; iss: string }> {
   const flow = db.prepare("SELECT nonce,verifier,expires_at FROM oidc_flows WHERE state_hash=?").get(hashToken(state)) as { nonce: string; verifier: string; expires_at: number } | undefined;
   db.prepare("DELETE FROM oidc_flows WHERE state_hash=?").run(hashToken(state)); // one use only
   if (!flow || flow.expires_at < Date.now()) throw new Error("Login expired, please try again");
@@ -89,5 +89,18 @@ export async function finishLogin(db: DatabaseSync, cfg: OidcConfig, code: strin
   if (!email) throw new Error("Provider did not share an email address");
   if (claims.email_verified === false) throw new Error("Email address is not verified at the provider");
   if (cfg.allowedDomains.length && !cfg.allowedDomains.includes(email.split("@")[1])) throw new Error("This email domain is not allowed");
-  return { email, name: claims.name?.trim() || email };
+  if (!claims.sub) throw new Error("ID token has no subject");
+  return { email, name: claims.name?.trim() || email, sub: claims.sub, iss: String(claims.iss) };
+}
+
+// Who may sign in with SSO: only a user an admin created for SSO (no password), and always the same provider account.
+// An email asserted by the provider never grants access to a password user (that would let anyone who can set an
+// email at a lenient provider become the admin), and it never creates users.
+export function userForSso(db: DatabaseSync, id: { email: string; sub: string; iss: string }): User | null {
+  const u = findUserByEmail(db, id.email);
+  if (!u || u.disabled || u.password_hash !== null) return null;
+  const bound = `${id.iss}|${id.sub}`;
+  if (u.sso_sub && u.sso_sub !== bound) return null;
+  if (!u.sso_sub) db.prepare("UPDATE users SET sso_sub=? WHERE id=? AND sso_sub IS NULL").run(bound, u.id);
+  return { id: u.id, email: u.email, name: u.name, role: u.role, department_id: u.department_id };
 }

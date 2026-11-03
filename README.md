@@ -70,10 +70,10 @@ as the redirect URI, then set:
 | `PATUH_OIDC_CLIENT_ID`, `PATUH_OIDC_CLIENT_SECRET` | From your provider |
 | `PATUH_PUBLIC_URL` | `https://<your-host>`, must be https (localhost allowed for testing) |
 | `PATUH_OIDC_ALLOWED_DOMAINS` | Optional, e.g. `example.id,example.co.id` |
-| `PATUH_OIDC_AUTO_CREATE` | `1` to create unknown SSO users. They get **no access** until an admin assigns a department |
 
-By default only users that already exist (created with `user add`) can sign in with SSO.
-ID tokens are verified in Patuh (signature, issuer, audience, expiry, nonce) and the flow uses PKCE.
+SSO signs in only users an admin created with `user add --sso` (no password). They are bound to the first identity-provider
+account that signs in, so a different account with the same email is refused. Users with a password never sign in through SSO,
+and SSO never creates users. ID tokens are verified in Patuh (signature, issuer, audience, expiry, nonce) and the flow uses PKCE.
 
 ## Other settings
 
@@ -100,8 +100,10 @@ check the official text. The rules live in `src/core/screening.ts` so they are e
 
 Security notes: sessions are random tokens in HttpOnly, SameSite cookies (only a hash is stored); every change needs a
 CSRF header; each record is checked against the signed-in user's department; every change is written to an audit log;
-login attempts are throttled per account. Login throttling is in memory, so run a single server, or add a shared store
-if you scale out.
+login attempts are throttled per account (5 wrong passwords lock the account for 15 minutes, so a determined attacker can
+lock a known email out: add per-IP limits at your reverse proxy). Throttling is in memory, so run a single server, or add a
+shared store if you scale out. Editing a signed-off process without sign-off rights withdraws the signature. The database
+file is created readable by its owner only.
 
 ## Develop
 

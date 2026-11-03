@@ -55,6 +55,8 @@ const fails = new Map<string, { n: number; until: number }>();
 export const MAX_FAILS = 5, LOCK_MS = 15 * 60_000;
 export const isLocked = (key: string) => (fails.get(key)?.until ?? 0) > Date.now();
 export function recordFail(key: string) {
+  if (fails.size > 10_000) for (const [k, v] of fails) if (v.until < Date.now() && v.n === 0) fails.delete(k); // bound memory
+  if (fails.size > 100_000) fails.clear();
   const f = fails.get(key) ?? { n: 0, until: 0 };
   f.n += 1; if (f.n >= MAX_FAILS) { f.until = Date.now() + LOCK_MS; f.n = 0; }
   fails.set(key, f);
@@ -69,8 +71,8 @@ export const canSignOff = (u: User) => u.role === "admin" || u.role === "dpo";
 
 // ---- users ----
 export function findUserByEmail(db: DatabaseSync, email: string) {
-  return db.prepare("SELECT id,email,name,role,department_id,password_hash,disabled FROM users WHERE email=?").get(email.trim()) as
-    (User & { password_hash: string | null; disabled: number }) | undefined;
+  return db.prepare("SELECT id,email,name,role,department_id,password_hash,sso_sub,disabled FROM users WHERE email=?").get(email.trim()) as
+    (User & { password_hash: string | null; sso_sub: string | null; disabled: number }) | undefined;
 }
 export async function createUser(db: DatabaseSync, u: { email: string; name: string; role: Role; departmentId?: number | null; password?: string | null }): Promise<number> {
   const email = u.email.trim();

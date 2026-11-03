@@ -35,6 +35,38 @@ describe("demo data", () => {
   });
 });
 
+describe("database upgrade and demo removal", () => {
+  it("adds the demo columns to a database created before they existed", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const path = join(mkdtempSync(join(tmpdir(), "patuh-old-")), "old.db");
+    const old = new DatabaseSync(path);
+    // the schema as it was on main: no `demo` columns
+    old.exec(`CREATE TABLE departments (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+      CREATE TABLE activities (id INTEGER PRIMARY KEY, department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, purpose TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', data_categories TEXT NOT NULL DEFAULT '',
+        data_subjects TEXT NOT NULL DEFAULT '', ai_system TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '', data_location TEXT NOT NULL DEFAULT '',
+        cross_border INTEGER NOT NULL DEFAULT 0, legal_basis TEXT NOT NULL DEFAULT '', retention TEXT NOT NULL DEFAULT '', necessity TEXT NOT NULL DEFAULT '',
+        screening TEXT NOT NULL DEFAULT '[]', dpo_advice TEXT NOT NULL DEFAULT '', subjects_views TEXT NOT NULL DEFAULT '', review_date TEXT NOT NULL DEFAULT '',
+        signed_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
+    old.exec("INSERT INTO departments (name) VALUES ('Old'); INSERT INTO activities (department_id,name) VALUES (1,'Old process');");
+    old.close();
+    const db = openDb(path);
+    expect(loadDemo(db).processes).toBe(11);
+    removeDemo(db);
+    expect(db.prepare("SELECT name FROM activities").all()).toEqual([{ name: "Old process" }]);
+  });
+  it("never deletes a demo department that real members belong to", async () => {
+    const { createUser } = await import("../server/auth.js");
+    const db = openDb(":memory:");
+    loadDemo(db);
+    const marketing = Number((db.prepare("SELECT id FROM departments WHERE name='Marketing'").get() as { id: number }).id);
+    await createUser(db, { email: "m@x.id", name: "M", role: "member", departmentId: marketing, password: "a long enough password" });
+    removeDemo(db);
+    expect(db.prepare("SELECT name FROM departments").all()).toEqual([{ name: "Marketing" }]);
+    expect(db.prepare("SELECT department_id FROM users").get()).toEqual({ department_id: marketing });
+  });
+});
+
 describe("admin script", () => {
   let db: string;
   beforeEach(() => { db = join(mkdtempSync(join(tmpdir(), "patuh-")), "t.db"); vi.spyOn(console, "log").mockImplementation(() => {}); process.env.PATUH_NEW_PASSWORD = "a long enough password"; });
@@ -62,9 +94,18 @@ describe("admin script", () => {
     await expect(run(["user", "add", "--db", db, "--email", "x@o.id", "--name", "X", "--role", "member"])).rejects.toThrow(/department/);
     await expect(run(["user", "add", "--db", db, "--email", "x@o.id", "--name", "X", "--role", "boss", "--sso"])).rejects.toThrow(/Role/);
     await expect(run(["user", "disable", "--db", db, "--email", "a@o.id"])).rejects.toThrow(/last active admin/);
-    await expect(run(["user", "remove", "--db", db, "--email", "a@o.id"])).rejects.toThrow(/last admin/);
+    await expect(run(["user", "remove", "--db", db, "--email", "a@o.id"])).rejects.toThrow(/last active admin/);
     await run(["user", "disable", "--db", db, "--email", "m@o.id"]);
     expect(openDb(db).prepare("SELECT disabled FROM users WHERE email='m@o.id'").get()).toEqual({ disabled: 1 });
+  });
+  it("last-admin guards count only other ACTIVE admins", async () => {
+    await run(["init", "--db", db, "--org", "O", "--admin-email", "a@o.id", "--admin-name", "A", "--no-demo"]);
+    await run(["user", "add", "--db", db, "--email", "b@o.id", "--name", "B", "--role", "admin", "--sso"]);
+    await run(["user", "disable", "--db", db, "--email", "b@o.id"]);
+    await expect(run(["user", "remove", "--db", db, "--email", "a@o.id"])).rejects.toThrow(/last active admin/); // B exists but is disabled
+    await run(["user", "disable", "--db", db, "--email", "b@o.id"]); // already disabled: allowed, nothing is lost
+    await run(["user", "remove", "--db", db, "--email", "b@o.id"]);
+    await expect(run(["user", "disable", "--db", db, "--email", "a@o.id"])).rejects.toThrow(/last active admin/);
   });
   it("rejects weak passwords", async () => {
     process.env.PATUH_NEW_PASSWORD = "short";

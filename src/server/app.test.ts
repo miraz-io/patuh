@@ -183,11 +183,55 @@ describe("workflow and validation", () => {
     expect((db.prepare("SELECT demo FROM activities WHERE id=?").get(act) as { demo: number }).demo).toBe(0);
     expect(db.prepare("SELECT COUNT(*) n FROM users").get()).toMatchObject({ n: 5 });
   });
-  it("writes an audit trail without request bodies", async () => {
+  it("writes an audit trail of sign-ins and changes, without request bodies or anonymous noise", async () => {
     const { app, db } = await setup();
     await login(app, "admin@x.id", "wrong password!!");
-    const rows = db.prepare("SELECT method,path,status FROM audit_log").all();
-    expect(rows).toContainEqual({ method: "POST", path: "/api/auth/login", status: 401 });
-    expect(JSON.stringify(rows)).not.toContain("wrong password");
+    await call(app, "/api/" + "a".repeat(5000), { method: "POST", body: { x: 1 } }); // anonymous junk
+    expect(db.prepare("SELECT COUNT(*) n FROM audit_log").get()).toEqual({ n: 0 });
+    const { cookie } = await login(app, "admin@x.id");
+    await call(app, "/api/departments", { cookie, body: { name: "Secretive department" } });
+    const rows = db.prepare("SELECT email,method,path,status FROM audit_log ORDER BY id").all();
+    expect(rows).toEqual([{ email: "admin@x.id", method: "POST", path: "/api/auth/login", status: 200 }, { email: "admin@x.id", method: "POST", path: "/api/departments", status: 201 }]);
+    expect(JSON.stringify(rows)).not.toMatch(/wrong password|Secretive/);
+  });
+  it("rejects oversized request bodies", async () => {
+    const { app } = await setup();
+    const r = await call(app, "/api/auth/login", { body: { email: "a@x.id", password: "x".repeat(300_000) } });
+    expect(r.status).toBe(413);
+  });
+  it("a burst of parallel wrong guesses cannot get past the limit", async () => {
+    const { app } = await setup();
+    const codes = await Promise.all(Array.from({ length: 20 }, () => login(app, "burst@x.id", "wrong wrong wrong")));
+    expect(codes.filter((r) => r.status === 401).length).toBeLessThanOrEqual(5); // the rest are 429 (locked) or busy
+    expect((await login(app, "burst@x.id", "wrong wrong wrong")).status).toBe(429);
+  });
+  it("editing a signed-off process without sign-off rights withdraws the signature", async () => {
+    const { app, hr } = await setup();
+    const hrUser = (await login(app, "hr@x.id")).cookie, dpo = (await login(app, "dpo@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "A" } }))).id;
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "DPO Dewi" } });
+    const signed = async () => (await json(await call(app, "/api/activities", { cookie: dpo }))).find((a: any) => a.id === act).signed_by;
+    expect(await signed()).toBe("DPO Dewi");
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { purpose: "DPO tweak keeps it" } });
+    expect(await signed()).toBe("DPO Dewi");
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: { necessity: "changed after sign-off" } });
+    expect(await signed()).toBe("");
+  });
+  it("does not reveal the demo tour process to users who cannot read it", async () => {
+    const { app, db, hr } = await setup();
+    const fin = Number(db.prepare("SELECT id FROM departments WHERE name='Finance'").get()!.id);
+    db.prepare("INSERT INTO activities (department_id,name,demo) VALUES (?, 'Demo', 1)").run(fin);
+    db.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES ('demo_loaded','1')").run();
+    const me = async (e: string) => (await json(await call(app, "/api/auth/me", { cookie: (await login(app, e)).cookie }))).tourActivityId;
+    expect(await me("hr@x.id")).toBeNull();
+    expect(await me("fin@x.id")).not.toBeNull();
+    expect(hr).toBeGreaterThan(0);
+  });
+  it("opens the database file for the owner only", async () => {
+    const { mkdtempSync, statSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os"); const { join } = await import("node:path");
+    const path = join(mkdtempSync(join(tmpdir(), "patuh-perm-")), "sub", "p.db");
+    openDb(path);
+    expect(statSync(path).mode & 0o077).toBe(0);
   });
 });

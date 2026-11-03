@@ -31,6 +31,9 @@ export function App() {
     setDepts(d); setActs(a); setDash(s);
   }, []);
   useEffect(() => { onError(setError); onSignedOut(() => setMe(null)); loadMe(); }, [loadMe]);
+  useEffect(() => { // forget the previous person's data as soon as they sign out
+    if (me === null) { setActs([]); setDash([]); setDepts([]); setCriteria([]); setTour(null); setOpen(null); setPage("dashboard"); }
+  }, [me]);
   useEffect(() => { if (me) { load().catch(() => {}); api<Criterion[]>("/api/criteria").then(setCriteria).catch(() => {}); } }, [me?.user.id, load]);
 
   // The tour opens the demo process, or the first one this person is allowed to see.

@@ -1,6 +1,8 @@
 import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { oidcFromEnv, verifyIdToken } from "./oidc.js";
+import { createUser } from "./auth.js";
+import { openDb } from "./db.js";
+import { oidcFromEnv, userForSso, verifyIdToken } from "./oidc.js";
 
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -46,12 +48,37 @@ describe("SSO configuration", () => {
   const base = { PATUH_OIDC_ISSUER: "https://idp.example/", PATUH_OIDC_CLIENT_ID: "c", PATUH_OIDC_CLIENT_SECRET: "s", PATUH_PUBLIC_URL: "https://patuh.example" };
   it("is off when no issuer is set", () => expect(oidcFromEnv({})).toBeNull());
   it("builds the redirect URI and normalises the issuer", () => {
-    expect(oidcFromEnv({ ...base, PATUH_OIDC_ALLOWED_DOMAINS: "X.id, y.id" })).toMatchObject({ issuer: "https://idp.example", redirectUri: "https://patuh.example/api/auth/oidc/callback", allowedDomains: ["x.id", "y.id"], autoCreate: false });
+    expect(oidcFromEnv({ ...base, PATUH_OIDC_ALLOWED_DOMAINS: "X.id, y.id" })).toMatchObject({ issuer: "https://idp.example", redirectUri: "https://patuh.example/api/auth/oidc/callback", allowedDomains: ["x.id", "y.id"] });
   });
   it("refuses plain http except on localhost, and missing secrets", () => {
     expect(() => oidcFromEnv({ ...base, PATUH_OIDC_ISSUER: "http://idp.example" })).toThrow(/https/);
     expect(() => oidcFromEnv({ ...base, PATUH_PUBLIC_URL: "http://patuh.example" })).toThrow(/https/);
     expect(oidcFromEnv({ ...base, PATUH_PUBLIC_URL: "http://localhost:8080" })).not.toBeNull();
     expect(() => oidcFromEnv({ PATUH_OIDC_ISSUER: "https://idp.example" })).toThrow(/needs/);
+  });
+});
+
+describe("which users SSO may sign in", () => {
+  const id = { email: "sso@x.id", sub: "abc", iss: "https://idp.example" };
+  it("signs in an SSO-only user and binds them to that provider account", async () => {
+    const db = openDb(":memory:");
+    await createUser(db, { email: "sso@x.id", name: "S", role: "auditor", password: null });
+    expect(userForSso(db, id)?.email).toBe("sso@x.id");
+    expect(userForSso(db, id)?.email).toBe("sso@x.id"); // same account again
+    expect(userForSso(db, { ...id, sub: "someone-else" })).toBeNull(); // same email, different provider account
+    expect(userForSso(db, { ...id, iss: "https://other.example" })).toBeNull();
+  });
+  it("never lets a provider-asserted email take over a password user", async () => {
+    const db = openDb(":memory:");
+    await createUser(db, { email: "admin@x.id", name: "A", role: "admin", password: "a long enough password" });
+    expect(userForSso(db, { ...id, email: "admin@x.id" })).toBeNull();
+  });
+  it("does not create users and skips disabled ones", async () => {
+    const db = openDb(":memory:");
+    expect(userForSso(db, id)).toBeNull();
+    await createUser(db, { email: "sso@x.id", name: "S", role: "auditor", password: null });
+    db.prepare("UPDATE users SET disabled=1").run();
+    expect(userForSso(db, id)).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) n FROM users").get()).toEqual({ n: 1 });
   });
 });
