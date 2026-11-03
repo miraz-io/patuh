@@ -52,6 +52,24 @@ export function createApp(db: DatabaseSync) {
       b.likelihood as number, b.severity as number, (b.residual_likelihood as number) ?? null, (b.residual_severity as number) ?? null);
     return c.json({ id: Number(r.lastInsertRowid) }, 201);
   });
+  app.get("/api/activities/:id/risks", (c) => c.json(
+    all(db, "SELECT * FROM risks WHERE activity_id=? ORDER BY id", Number(c.req.param("id"))).map((r) => ({
+      ...r, controls: all(db, "SELECT * FROM controls WHERE risk_id=? ORDER BY id", r.id as number) }))));
+  app.patch("/api/risks/:id", async (c) => {
+    const b = await json(c); if (!b) return bad("invalid json");
+    for (const k of ["residual_likelihood", "residual_severity"] as const) {
+      if (b[k] === undefined) continue;
+      if (!Number.isInteger(b[k]) || (b[k] as number) < 1 || (b[k] as number) > 4) return bad(`${k} must be 1-4`);
+      db.prepare(`UPDATE risks SET ${k}=? WHERE id=?`).run(b[k] as number, Number(c.req.param("id"))); // key is from the allow-list above
+    }
+    return c.json({ ok: true });
+  });
+  app.patch("/api/controls/:id", async (c) => {
+    const b = await json(c);
+    if (!b || !["planned", "in-progress", "done"].includes(b.status as string)) return bad("status must be planned, in-progress or done");
+    db.prepare("UPDATE controls SET status=? WHERE id=?").run(b.status as string, Number(c.req.param("id")));
+    return c.json({ ok: true });
+  });
   app.post("/api/risks/:id/controls", async (c) => {
     const b = await json(c); if (!b || typeof b.title !== "string" || !b.title.trim()) return bad("title required");
     const r = db.prepare("INSERT INTO controls (risk_id,title,owner,due,status) VALUES (?,?,?,?,?)")
