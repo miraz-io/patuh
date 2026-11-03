@@ -1,0 +1,28 @@
+{
+  "name": "patuh",
+  "version": "0.1.0",
+  "description": "Open-source AI and data-protection compliance workspace for Indonesia (UU PDP), aligned with GDPR. DPIA, risk register, controls.",
+  "license": "Apache-2.0",
+  "author": "Rino Miraz",
+  "private": false,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "start": "tsx src/server/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "docx": "^9.5.0",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
