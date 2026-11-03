@@ -42,13 +42,31 @@ npm run admin -- demo remove   # removes only the demo; your own processes and d
 
 ## AI assistant (optional)
 
-Admins open **Settings** and enter any OpenAI-compatible service: an API address (for example `https://api.openai.com/v1` or `http://localhost:11434/v1` for Ollama), a model name and, if needed, an API key.
+Admins open **Settings** and enter any OpenAI-compatible service that supports tool calling (an API address such as `https://api.openai.com/v1` or `http://localhost:11434/v1`, a model name and, if needed, a key).
 
-- **New process:** people only type the process name and a short description. Patuh drafts the details, DPIA screening, risks and controls for them to review.
-- **Chat bubble** (bottom right of a process): ask questions or say what to change ("retention is 5 years"). The assistant edits the record and lists what it changed. Manual editing still works.
-- The assistant never writes the DPO advice or sign-off fields, and an edit by someone who cannot sign off withdraws an earlier sign-off, just like a manual edit.
-- **Privacy:** the process description and record are sent to the service you configure and may contain personal data. Choose a provider that fits your own rules, or host a model yourself.
-- The API key is stored in the database file (permissions 0600) and is never sent back to the browser.
+**The AI is never the source of truth.** It is an agent with tools: it can read the process record, run the DPIA screening rules, search and read the regulation library, propose changes and ask you questions. The server enforces the rest:
+
+- **Answers are checked.** Every statement must cite something the server can verify: a library unit the agent actually opened (with a quote that really appears in it), the record, or the screening result. Anything else is deleted. If nothing is left, the assistant says it has no source and shows the closest library sections instead of guessing.
+- **It proposes, you decide.** Edits arrive as before/after cards you accept, edit or reject. Nothing changes before that, and a proposal is refused if the field changed since the AI looked at it.
+- **Drafts are marked.** Anything an AI wrote shows an "AI draft" or "Assumption" badge until a person confirms it. A process cannot be signed off while it has empty fields or unconfirmed AI drafts. The checklist at the top of each process shows what is left.
+- **New process:** type a name and a few sentences; the AI drafts details, DPIA criteria, risks and controls as unconfirmed drafts.
+- **Audit and quality:** every AI turn is logged (question, sources opened, outcome, tokens, time, and what you did with each proposal). Settings shows the quality numbers (answers with a checked source, dropped statements, acceptance rate, latency, ...) and the questions the library could not answer. Question text is blanked after 180 days (`ai_retention_days` setting); the numbers stay.
+- **Privacy:** the question, the process record and the library units it opens are sent to the service you configure and may contain personal data. Choose a provider that fits your own rules, or host a model yourself. The API key is stored in the database file (permissions 0600) and never sent back to the browser.
+
+## Regulation library
+
+`library/*.md` is loaded into SQLite at start (changed files only) and searched with SQLite full-text search (FTS5) plus a trigram index for Indonesian word forms and an English/Indonesian term table. Open **Library** in the app to search it together with your own processes, read a section, and see the same topic in other laws.
+
+| Source | Text | Checked against the official source |
+|---|---|---|
+| UU 27/2022 (selected articles) | official wording | yes |
+| GDPR (selected articles and recitals) | official wording | yes |
+| EU AI Act (selected articles, Annex III headings) | official wording | yes |
+| NIST AI RMF 1.0 | official wording | yes |
+| ISO/IEC 27001, 27701, 42001 | clause IDs and short own-words labels only (the standards are copyrighted) | no |
+| PP 33/2026 | **not included**: it was reported as issued in July 2026, but no official text could be fetched. Add it by dropping the official text into `library/` in the same format. | n/a |
+
+File format: front matter (`code`, `lang`, `title`, `text_kind`, `verified`, `url`, ...) and headings ending in an id, for example `## Pasal 34 {#34}`. Cross-law mappings live in `library/mappings.csv` (marked `draft-ai` until a person reviews them). A golden set (`eval/golden.jsonl`) checks that the right section is found; `npm test` fails if search quality drops below 85%.
 
 ## People and sign-in
 

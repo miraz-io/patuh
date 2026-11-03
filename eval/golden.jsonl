@@ -1,0 +1,36 @@
+{"q": "When is a DPIA required?", "expect": ["uupdp-2022/34"]}
+{"q": "kapan penilaian dampak pelindungan data pribadi wajib dilakukan", "expect": ["uupdp-2022/34"]}
+{"q": "Pasal 34", "expect": ["uupdp-2022/34"]}
+{"q": "data protection impact assessment high risk", "expect": ["gdpr-2016-679/35"]}
+{"q": "Art. 35(7) content of the assessment", "expect": ["gdpr-2016-679/35"]}
+{"q": "how fast must a personal data breach be notified", "expect": ["uupdp-2022/46", "gdpr-2016-679/33"]}
+{"q": "batas waktu pemberitahuan kegagalan pelindungan data pribadi", "expect": ["uupdp-2022/46"]}
+{"q": "72 hours notify supervisory authority", "expect": ["gdpr-2016-679/33"]}
+{"q": "transfer personal data outside Indonesia", "expect": ["uupdp-2022/56"]}
+{"q": "transfer data pribadi ke luar wilayah hukum Indonesia", "expect": ["uupdp-2022/56"]}
+{"q": "transfers to third countries safeguards", "expect": ["gdpr-2016-679/46", "gdpr-2016-679/44", "gdpr-2016-679/45"]}
+{"q": "data protection officer appointment", "expect": ["uupdp-2022/53", "gdpr-2016-679/37"]}
+{"q": "pejabat atau petugas yang melaksanakan fungsi pelindungan data pribadi", "expect": ["uupdp-2022/53"]}
+{"q": "lawful basis for processing", "expect": ["uupdp-2022/20", "gdpr-2016-679/6"]}
+{"q": "dasar pemrosesan data pribadi persetujuan", "expect": ["uupdp-2022/20"]}
+{"q": "principles relating to processing of personal data", "expect": ["gdpr-2016-679/5"]}
+{"q": "automated individual decision-making including profiling", "expect": ["gdpr-2016-679/22"]}
+{"q": "hak subjek data menolak keputusan otomatis", "expect": ["uupdp-2022/10"]}
+{"q": "special categories of personal data", "expect": ["gdpr-2016-679/9"]}
+{"q": "security of processing", "expect": ["gdpr-2016-679/32"]}
+{"q": "keamanan data pribadi pengendali wajib", "expect": ["uupdp-2022/35", "uupdp-2022/39"]}
+{"q": "prior consultation supervisory authority residual high risk", "expect": ["gdpr-2016-679/36"]}
+{"q": "data processor contract", "expect": ["gdpr-2016-679/28"]}
+{"q": "records of processing activities", "expect": ["gdpr-2016-679/30"]}
+{"q": "data protection by design and by default", "expect": ["gdpr-2016-679/25"]}
+{"q": "high-risk AI systems classification", "expect": ["eu-ai-act-2024-1689/6"]}
+{"q": "risk management system for high-risk AI", "expect": ["eu-ai-act-2024-1689/9"]}
+{"q": "data governance training data AI", "expect": ["eu-ai-act-2024-1689/10"]}
+{"q": "human oversight of AI systems", "expect": ["eu-ai-act-2024-1689/14"]}
+{"q": "obligations of deployers of high-risk AI", "expect": ["eu-ai-act-2024-1689/26"]}
+{"q": "fundamental rights impact assessment deployers", "expect": ["eu-ai-act-2024-1689/27"]}
+{"q": "AI risk governance accountability", "expect": ["nist-ai-rmf-1.0/GOVERN-1", "nist-ai-rmf-1.0/GOVERN-2"]}
+{"q": "measure AI risks trustworthiness metrics", "expect": ["nist-ai-rmf-1.0/MEASURE-1", "nist-ai-rmf-1.0/MEASURE-2"]}
+{"q": "subject access right to obtain copy of personal data", "expect": ["uupdp-2022/5", "uupdp-2022/6", "uupdp-2022/7", "uupdp-2022/8", "uupdp-2022/9", "uupdp-2022/10", "uupdp-2022/11", "uupdp-2022/12", "uupdp-2022/13", "uupdp-2022/14"]}
+{"q": "definisi data pribadi", "expect": ["uupdp-2022/1"]}
+{"q": "controller definition", "expect": ["gdpr-2016-679/4"]}

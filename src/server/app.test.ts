@@ -23,6 +23,7 @@ async function login(app: App, email: string, password = PW) {
   const r = await call(app, "/api/auth/login", { body: { email, password } });
   return { status: r.status, cookie: (r.headers.get("set-cookie") ?? "").split(";")[0] };
 }
+const COMPLETE = { purpose: "p", description: "d", data_categories: "c", data_subjects: "s", legal_basis: "l", retention: "r", necessity: "n", data_location: "id", screening: [] };
 const json = async <T = any>(r: Response) => (await r.json()) as T;
 
 describe("sign-in", () => {
@@ -132,6 +133,8 @@ describe("permissions", () => {
     const act = (await json(await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "A" } }))).id;
     expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: { signed_by: "Me" } })).status).toBe(403);
     expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: { dpo_advice: "fine" } })).status).toBe(403);
+    expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "DPO" } })).status).toBe(400); // incomplete record: nothing to sign yet
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: COMPLETE });
     expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "DPO" } })).status).toBe(200);
     expect((await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "B", signed_by: "Me" } })).status).toBe(403);
   });
@@ -209,6 +212,7 @@ describe("workflow and validation", () => {
     const { app, hr } = await setup();
     const hrUser = (await login(app, "hr@x.id")).cookie, dpo = (await login(app, "dpo@x.id")).cookie;
     const act = (await json(await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "A" } }))).id;
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: COMPLETE });
     await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "DPO Dewi" } });
     const signed = async () => (await json(await call(app, "/api/activities", { cookie: dpo }))).find((a: any) => a.id === act).signed_by;
     expect(await signed()).toBe("DPO Dewi");

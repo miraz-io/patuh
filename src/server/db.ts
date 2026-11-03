@@ -50,6 +50,42 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE TABLE IF NOT EXISTS tutorial_progress (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, tour_id TEXT NOT NULL,
   completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, tour_id));
+
+-- Regulation library: the source of truth for what the law says. Loaded from library/*.md, never edited in the UI.
+CREATE TABLE IF NOT EXISTS lib_source (
+  id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, lang TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL DEFAULT '',
+  jurisdiction TEXT NOT NULL DEFAULT '', version TEXT NOT NULL DEFAULT '', effective_from TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'in_force',
+  licence TEXT NOT NULL DEFAULT 'public', text_kind TEXT NOT NULL DEFAULT 'verbatim', url TEXT NOT NULL DEFAULT '',
+  verified TEXT NOT NULL DEFAULT 'no', verified_on TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', sha256 TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS lib_unit (
+  id INTEGER PRIMARY KEY, source_id INTEGER NOT NULL REFERENCES lib_source(id) ON DELETE CASCADE,
+  uid TEXT NOT NULL UNIQUE, parent_id INTEGER, ord INTEGER NOT NULL, level INTEGER NOT NULL,
+  ref TEXT NOT NULL, heading TEXT NOT NULL, text TEXT NOT NULL, text_kind TEXT NOT NULL, text_hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS lib_map (
+  from_uid TEXT NOT NULL, to_uid TEXT NOT NULL, relation TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', reviewed_by TEXT NOT NULL DEFAULT '');
+CREATE VIRTUAL TABLE IF NOT EXISTS lib_fts USING fts5(ref, heading, text, content='lib_unit', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE IF NOT EXISTS lib_tri USING fts5(heading, text, content='lib_unit', content_rowid='id', tokenize='trigram');
+
+-- Where each field of a process came from. A field written by an AI is a draft until a person confirms it.
+CREATE TABLE IF NOT EXISTS field_meta (
+  activity_id INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE, field TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('user','ai_draft','ai_assumption')), confirmed INTEGER NOT NULL DEFAULT 0,
+  cites TEXT NOT NULL DEFAULT '[]', PRIMARY KEY (activity_id, field));
+
+-- Every AI turn, what it looked at, and what people did with its proposals. Basis for metrics and improvement.
+CREATE TABLE IF NOT EXISTS ai_interaction (
+  id INTEGER PRIMARY KEY, at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, user_id INTEGER, activity_id INTEGER,
+  kind TEXT NOT NULL, lang TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', question TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL, steps INTEGER NOT NULL DEFAULT 0, tools_json TEXT NOT NULL DEFAULT '[]', retrieved_json TEXT NOT NULL DEFAULT '[]',
+  cited_json TEXT NOT NULL DEFAULT '[]', blocks_total INTEGER NOT NULL DEFAULT 0, blocks_dropped INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, latency_ms INTEGER NOT NULL DEFAULT 0,
+  answer_json TEXT NOT NULL DEFAULT '', rating INTEGER, rating_note TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS ai_proposal (
+  id INTEGER PRIMARY KEY, interaction_id INTEGER NOT NULL REFERENCES ai_interaction(id) ON DELETE CASCADE,
+  activity_id INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE, kind TEXT NOT NULL, target TEXT NOT NULL,
+  before_json TEXT NOT NULL DEFAULT 'null', after_json TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', cites TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','edited','rejected','stale')),
+  decided_by INTEGER, decided_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 `;
 
 export function openDb(path: string): DatabaseSync {
@@ -64,6 +100,8 @@ export function openDb(path: string): DatabaseSync {
   };
   addColumn("departments", "demo", "INTEGER NOT NULL DEFAULT 0");
   addColumn("activities", "demo", "INTEGER NOT NULL DEFAULT 0");
+  addColumn("risks", "source", "TEXT NOT NULL DEFAULT 'user'");      // 'ai' until a person confirms it
+  addColumn("risks", "confirmed", "INTEGER NOT NULL DEFAULT 1");
   return db;
 }
 

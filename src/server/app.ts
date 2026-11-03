@@ -7,7 +7,11 @@ import { CRITERIA, screen } from "../core/screening.js";
 import { needsPriorConsultation, riskLevel } from "../core/risk.js";
 import { dpiaBuffer, type Activity, type Lang, type RiskRow } from "../core/dpia.js";
 import { createActivity, getSetting, setSetting, updateActivity } from "./db.js";
-import { AiError, aiConfig, applyChat, chatMessages, complete, createFromDraft, draftMessages, extractJson, type AiConfig, type Turn } from "./ai.js";
+import { AiError, aiConfig, complete, completeUsage, createFromDraft, draftMessages, extractJson, logInteraction, purgeAiText, setMeta, type AiConfig, type Turn } from "./ai.js";
+import { activityState, runAgent } from "./agent.js";
+import { decide } from "./proposals.js";
+import { getUnit, listSources, searchLibrary } from "./library.js";
+import { REQUIRED_FIELDS, questionFor } from "../core/completeness.js";
 import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, createSession, endSession, findUserByEmail,
   isLocked, recordFail, userForSession, verifyPassword, type User } from "./auth.js";
 import { finishLogin, startLogin, userForSso, type OidcConfig } from "./oidc.js";
@@ -186,7 +190,7 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     return await withAi(c, async (cfg) => c.json({ ok: true, reply: (await complete(cfg, [{ role: "user", content: "Reply with the single word OK." }], opts.aiFetch)).slice(0, 100) }));
   });
 
-  // Describe a process in your own words; the AI drafts the whole record (details, screening, risks, controls) for review.
+  // Describe a process in your own words; the AI drafts the whole record (details, screening, risks, controls). Everything it writes is a draft until a person confirms it.
   app.post("/api/activities/ai", async (c) => {
     const u = c.get("user"), b = await body(c);
     if (!isObj(b) || typeof b.department_id !== "number" || !Number.isInteger(b.department_id)) return err(c, 400, "name, description and department_id required");
@@ -194,31 +198,125 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (!canWrite(u, b.department_id)) return err(c, 403, "You cannot add processes to this department");
     const name = text(b.name, 200)?.trim(), description = text(b.description, 4000)?.trim();
     if (!name || !description) return err(c, 400, "name and description required");
-    const dept = b.department_id;
+    const dept = b.department_id, lang = langOf(b.lang), t0 = Date.now();
     return withAi(c, async (cfg) => {
-      const raw = extractJson(await complete(cfg, draftMessages(name, description, langOf(b.lang)), opts.aiFetch));
-      return c.json({ id: createFromDraft(db, dept, name, description, raw) }, 201);
+      let r;
+      try { r = await completeUsage(cfg, draftMessages(name, description, lang), opts.aiFetch); }
+      catch (e) { logInteraction(db, { user_id: u.id, activity_id: null, kind: "draft", lang, model: cfg.model, question: description, outcome: "error", latency_ms: Date.now() - t0 }); throw e; }
+      let id: number;
+      try { id = createFromDraft(db, dept, name, description, extractJson(r.content)); }
+      catch (e) { logInteraction(db, { user_id: u.id, activity_id: null, kind: "draft", lang, model: cfg.model, question: description, outcome: "error", usage: r.usage, latency_ms: Date.now() - t0 }); throw e; }
+      logInteraction(db, { user_id: u.id, activity_id: id, kind: "draft", lang, model: cfg.model, question: description, outcome: "answered", usage: r.usage, latency_ms: Date.now() - t0 });
+      return c.json({ id }, 201);
     });
   });
 
-  // Chat about one process: the AI answers and may edit the record (never the sign-off fields).
+  // Chat about one process: an agent that looks things up in the record and the library and PROPOSES changes. Nothing changes until a person accepts.
   app.post("/api/activities/:id/chat", async (c) => {
     const u = c.get("user"), id = int(c.req.param("id")), dept = deptOfActivity(id);
     if (!readable(u, dept)) return err(c, 404, "not found");
     if (!canWrite(u, dept)) return err(c, 403, "read-only");
     const b = await body(c), message = isObj(b) ? text(b.message, 4000)?.trim() : null;
     if (!isObj(b) || !message) return err(c, 400, "message required");
-    const history: Turn[] = (Array.isArray(b.history) ? b.history : []).slice(-10).flatMap((h): Turn[] =>
-      isObj(h) && (h.role === "user" || h.role === "assistant") && typeof h.content === "string" ? [{ role: h.role, content: h.content.slice(0, 4000) }] : []);
-    return withAi(c, async (cfg) => {
-      const row = one(db, "SELECT * FROM activities WHERE id=?", id)!;
-      const ctx = { name: row.name, ...Object.fromEntries(Object.keys(row).filter((k) => !["id", "department_id", "demo", "created_at", "dpo_advice", "signed_by", "name"].includes(k)).map((k) => [k, k === "screening" ? JSON.parse(row[k] as string) : row[k]])),
-        risks: all(db, "SELECT id,title,likelihood,severity,residual_likelihood,residual_severity FROM risks WHERE activity_id=? ORDER BY id", id).map((r) => ({ ...r, controls: all(db, "SELECT title,status FROM controls WHERE risk_id=?", r.id as number) })) };
-      const lang = langOf(b.lang);
-      const out = applyChat(db, id, extractJson(await complete(cfg, chatMessages(ctx, history, message, lang), opts.aiFetch)), lang);
-      if (out.applied.length && !canSignOff(u)) updateActivity(db, id, { signed_by: "" }); // same rule as a manual edit: changed content needs a fresh sign-off
-      return c.json(out);
-    });
+    const history: Turn[] = (Array.isArray(b.history) ? b.history : []).slice(-6).flatMap((h): Turn[] =>
+      isObj(h) && (h.role === "user" || h.role === "assistant") && typeof h.content === "string" ? [{ role: h.role, content: h.content.slice(0, 3000) }] : []);
+    return withAi(c, async (cfg) => { purgeAiText(db); return c.json(await runAgent(db, cfg, { actId: id, userId: u.id, lang: langOf(b.lang), message, history, fetch: opts.aiFetch })); });
+  });
+
+  const parseProposal = (r: Q) => ({ id: r.id, kind: r.kind, target: r.target, before: JSON.parse(r.before_json as string), after: JSON.parse(r.after_json as string), reason: r.reason, cites: JSON.parse(r.cites as string), status: r.status });
+  app.get("/api/activities/:id/proposals", (c) => {
+    const id = int(c.req.param("id"));
+    if (!readable(c.get("user"), deptOfActivity(id))) return err(c, 404, "not found");
+    return c.json(all(db, "SELECT * FROM ai_proposal WHERE activity_id=? AND status='pending' ORDER BY id", id).map(parseProposal));
+  });
+  for (const action of ["accept", "reject"] as const) app.post(`/api/proposals/:id/${action}`, async (c) => {
+    const u = c.get("user"), id = int(c.req.param("id")), act = one(db, "SELECT activity_id a FROM ai_proposal WHERE id=?", id)?.a as number | undefined;
+    const dept = act === undefined ? undefined : deptOfActivity(act);
+    if (!readable(u, dept)) return err(c, 404, "not found");
+    if (!canWrite(u, dept)) return err(c, 403, "read-only");
+    const b = await body(c);
+    const r = decide(db, u.id, canSignOff(u), id, action, isObj(b) ? b.value : undefined);
+    return r.ok ? c.json({ ok: true, status: r.status }) : c.json({ error: r.error }, r.code);
+  });
+  app.post("/api/interactions/:id/rating", async (c) => {
+    const id = int(c.req.param("id")), b = await body(c);
+    if (!isObj(b) || ![1, -1].includes(b.rating as number)) return err(c, 400, "rating must be 1 or -1");
+    const r = db.prepare("UPDATE ai_interaction SET rating=?, rating_note=? WHERE id=? AND user_id=?").run(b.rating as number, text(b.note, 500) ?? "", id, c.get("user").id);
+    return r.changes ? c.json({ ok: true }) : err(c, 404, "not found");
+  });
+
+  // What is still missing before sign-off, with the question to ask for each gap.
+  app.get("/api/activities/:id/completeness", (c) => {
+    const id = int(c.req.param("id")), lang = langOf(c.req.query("lang"));
+    if (!readable(c.get("user"), deptOfActivity(id))) return err(c, 404, "not found");
+    const { comp, meta } = activityState(db, id);
+    return c.json({ ...comp, gaps: comp.gaps.map((g) => ({ ...g, question: questionFor(g, lang) })), meta: Object.fromEntries(meta.map((m) => [m.field, { source: m.source, confirmed: !!m.confirmed }])) });
+  });
+  app.post("/api/activities/:id/confirm", async (c) => {
+    const u = c.get("user"), id = int(c.req.param("id")), dept = deptOfActivity(id);
+    if (!readable(u, dept)) return err(c, 404, "not found");
+    if (!canWrite(u, dept)) return err(c, 403, "read-only");
+    const b = await body(c);
+    if (!isObj(b) || !Array.isArray(b.fields) || !b.fields.every((f) => typeof f === "string")) return err(c, 400, "fields required");
+    const known = ["screening", ...REQUIRED_FIELDS, "ai_system", "vendor", "subjects_views", "cross_border"];
+    for (const f of (b.fields as string[]).filter((x) => known.includes(x))) db.prepare(`INSERT INTO field_meta (activity_id,field,source,confirmed) VALUES (?,?,'user',1)
+      ON CONFLICT(activity_id,field) DO UPDATE SET confirmed=1`).run(id, f); // also how a person says "none of the DPIA criteria apply"
+    return c.json({ ok: true });
+  });
+  app.post("/api/risks/:id/confirm", (c) => {
+    const u = c.get("user"), id = int(c.req.param("id")), act = activityOfRisk(id), dept = act === undefined ? undefined : deptOfActivity(act);
+    if (!readable(u, dept)) return err(c, 404, "not found");
+    if (!canWrite(u, dept)) return err(c, 403, "read-only");
+    db.prepare("UPDATE risks SET confirmed=1 WHERE id=?").run(id);
+    return c.json({ ok: true });
+  });
+
+  // ---------- library and search ----------
+  app.get("/api/library/sources", (c) => c.json(listSources(db)));
+  app.get("/api/library/unit", (c) => { const u = getUnit(db, c.req.query("uid") ?? ""); return u ? c.json(u) : err(c, 404, "not found"); });
+  app.get("/api/search", (c) => {
+    const u = c.get("user"), q = (c.req.query("q") ?? "").trim().slice(0, 300), scope = c.req.query("scope") ?? "all";
+    if (!q) return c.json({ library: [], processes: [] });
+    const library = scope === "processes" ? [] : searchLibrary(db, q, { source: c.req.query("source") || undefined, lang: c.req.query("lang") || undefined, limit: 20, advanced: c.req.query("advanced") === "1" ? true : undefined });
+    const processes = scope === "library" ? [] : searchProcesses(u, q);
+    return c.json({ library, processes });
+  });
+  // ponytail: LIKE scan over a few thousand rows is plenty for one organisation; move to an FTS5 table with triggers if it ever isn't.
+  const searchProcesses = (u: User, q: string) => {
+    const ws = (q.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []).slice(0, 6), everything = u.role === "member" ? 0 : 1, dept = u.department_id ?? -1;
+    if (!ws.length) return [];
+    const like = (expr: string) => ws.map(() => `${expr} LIKE ? ESCAPE '\\'`).join(" AND "), args = ws.map((w) => `%${w.replace(/[%_\\]/g, "\\$&")}%`);
+    const ACT = "lower(a.name||' '||a.purpose||' '||a.description||' '||a.data_categories||' '||a.data_subjects||' '||a.ai_system||' '||a.vendor||' '||a.data_location||' '||a.legal_basis||' '||a.retention||' '||a.necessity)";
+    return [
+      ...all(db, `SELECT 'process' kind, a.id activity_id, a.name title, d.name department, substr(a.purpose,1,140) snippet FROM activities a JOIN departments d ON d.id=a.department_id WHERE (?=1 OR a.department_id=?) AND ${like(ACT)} LIMIT 20`, everything, dept, ...args),
+      ...all(db, `SELECT 'risk' kind, a.id activity_id, r.title title, a.name department, substr(r.description,1,140) snippet FROM risks r JOIN activities a ON a.id=r.activity_id WHERE (?=1 OR a.department_id=?) AND ${like("lower(r.title||' '||r.description)")} LIMIT 20`, everything, dept, ...args),
+      ...all(db, `SELECT 'control' kind, a.id activity_id, k.title title, a.name department, '' snippet FROM controls k JOIN risks r ON r.id=k.risk_id JOIN activities a ON a.id=r.activity_id WHERE (?=1 OR a.department_id=?) AND ${like("lower(k.title||' '||k.owner)")} LIMIT 20`, everything, dept, ...args),
+    ];
+  };
+
+  // Quality numbers for the AI assistant (admin and DPO).
+  app.get("/api/ai/metrics", (c) => {
+    if (!canSignOff(c.get("user"))) return err(c, 403, "Only an admin or DPO can see this");
+    const days = Math.min(365, Math.max(1, Number(c.req.query("days")) || 30)), since = `-${days} days`;
+    const n = (sql: string, ...a: (string | number)[]) => (one(db, sql, ...a)?.n as number) ?? 0;
+    const chats = n("SELECT COUNT(*) n FROM ai_interaction WHERE kind='chat' AND at>=datetime('now',?)", since);
+    const by = (o: string) => n("SELECT COUNT(*) n FROM ai_interaction WHERE kind='chat' AND outcome=? AND at>=datetime('now',?)", o, since);
+    const blocks = n("SELECT COALESCE(SUM(blocks_total),0) n FROM ai_interaction WHERE kind='chat' AND at>=datetime('now',?)", since);
+    const dropped = n("SELECT COALESCE(SUM(blocks_dropped),0) n FROM ai_interaction WHERE kind='chat' AND at>=datetime('now',?)", since);
+    const lat = all(db, "SELECT latency_ms l FROM ai_interaction WHERE at>=datetime('now',?) ORDER BY latency_ms", since).map((r) => r.l as number);
+    const pct = (p: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(p * lat.length))] : 0);
+    const ps = (st: string) => n("SELECT COUNT(*) n FROM ai_proposal p JOIN ai_interaction i ON i.id=p.interaction_id WHERE p.status=? AND i.at>=datetime('now',?)", st, since);
+    const acc = ps("accepted"), edt = ps("edited"), rej = ps("rejected"), decided = acc + edt + rej;
+    const drafts = n("SELECT COUNT(*) n FROM field_meta WHERE source<>'user'"), draftsOk = n("SELECT COUNT(*) n FROM field_meta WHERE source<>'user' AND confirmed=1");
+    const rate = (a: number, b: number) => (b ? a / b : null);
+    return c.json({ days, interactions: n("SELECT COUNT(*) n FROM ai_interaction WHERE at>=datetime('now',?)", since), chats,
+      groundingRate: rate(blocks - dropped, blocks), unsupportedRate: rate(dropped, blocks), declineRate: rate(by("declined"), chats), clarificationRate: rate(by("clarified"), chats), errorRate: rate(by("error"), chats),
+      proposals: { accepted: acc, edited: edt, rejected: rej, pending: ps("pending"), stale: ps("stale") }, acceptanceRate: rate(acc + edt, decided), overrideRate: rate(edt + rej, decided),
+      assumptionConfirmed: rate(draftsOk, drafts), latencyP50: pct(0.5), latencyP95: pct(0.95),
+      tokens: n("SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0) n FROM ai_interaction WHERE at>=datetime('now',?)", since),
+      thumbsUp: n("SELECT COUNT(*) n FROM ai_interaction WHERE rating=1 AND at>=datetime('now',?)", since), thumbsDown: n("SELECT COUNT(*) n FROM ai_interaction WHERE rating=-1 AND at>=datetime('now',?)", since),
+      library: { sources: n("SELECT COUNT(*) n FROM lib_source"), units: n("SELECT COUNT(*) n FROM lib_unit") },
+      declinedQuestions: all(db, "SELECT question q, COUNT(*) n FROM ai_interaction WHERE outcome='declined' AND question<>'' AND at>=datetime('now',?) GROUP BY question ORDER BY n DESC LIMIT 10", since) });
   });
 
   const parseActivity = (r: Q) => ({ ...r, screening: JSON.parse(r.screening as string) });
@@ -246,7 +344,15 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (SIGNOFF_FIELDS.some((f) => f in v.value) && !canSignOff(u)) return err(c, 403, "Only an admin or DPO can fill in the sign-off fields");
     // A change by someone who cannot sign off withdraws an earlier sign-off: the DPO signed the old content.
     if (!canSignOff(u) && Object.keys(v.value).length) v.value.signed_by = "";
-    updateActivity(db, id, v.value);
+    const sign = typeof v.value.signed_by === "string" && v.value.signed_by.trim() !== "" && canSignOff(u);
+    const { signed_by, ...rest } = v.value;
+    updateActivity(db, id, sign ? rest : v.value);
+    for (const k of Object.keys(rest)) if (!["name", "dpo_advice", "review_date"].includes(k)) setMeta(db, id, k, "user", true); // typed by a person
+    if (sign) { // no signature while anything an AI wrote is unconfirmed
+      const left = activityState(db, id).comp.gaps.length;
+      if (left) return err(c, 400, `Not ready to sign off: ${left} item(s) are still empty or unconfirmed AI drafts. See the checklist on this page.`);
+      updateActivity(db, id, { signed_by });
+    }
     return c.json({ ok: true });
   });
 

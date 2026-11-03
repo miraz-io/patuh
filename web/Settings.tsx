@@ -3,6 +3,25 @@ import { api } from "./api.js";
 import type { T } from "./i18n.js";
 import { Btn, Card, inputCls } from "./ui.js";
 
+type M = { days: number; chats: number; interactions: number; groundingRate: number | null; unsupportedRate: number | null; declineRate: number | null; clarificationRate: number | null; errorRate: number | null;
+  acceptanceRate: number | null; overrideRate: number | null; assumptionConfirmed: number | null; latencyP50: number; latencyP95: number; tokens: number; library: { sources: number; units: number }; declinedQuestions: { q: string; n: number }[] };
+const pct = (v: number | null) => (v === null ? "–" : `${Math.round(v * 100)}%`);
+
+function Metrics({ t }: { t: T }) {
+  const [m, setM] = useState<M | null>(null);
+  useEffect(() => { api<M>("/api/ai/metrics").then(setM).catch(() => {}); }, []);
+  if (!m) return null;
+  const tile = (label: string, value: string, target?: string) => <div className="rounded-md border p-3"><div className="text-xl font-semibold">{value}</div><div className="text-xs text-muted-foreground">{label}</div>{target && <div className="text-xs text-muted-foreground">{t.metrics.target} {target}</div>}</div>;
+  return <Card className="space-y-3"><div className="flex items-baseline justify-between"><h2 className="font-medium">{t.metrics.title}</h2><span className="text-xs text-muted-foreground">{t.metrics.days} · {m.interactions} · {t.metrics.library}: {m.library.units}</span></div>
+    {!m.interactions ? <p className="text-sm text-muted-foreground">{t.metrics.none}</p> : <>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {tile(t.metrics.grounding, pct(m.groundingRate), "≥ 95%")}{tile(t.metrics.unsupported, pct(m.unsupportedRate), "≤ 5%")}{tile(t.metrics.decline, pct(m.declineRate))}
+        {tile(t.metrics.clarify, pct(m.clarificationRate), "10–30%")}{tile(t.metrics.accept, pct(m.acceptanceRate), "≥ 60%")}{tile(t.metrics.override, pct(m.overrideRate))}
+        {tile(t.metrics.confirmed, pct(m.assumptionConfirmed), "≥ 70%")}{tile(t.metrics.p50, (m.latencyP50 / 1000).toFixed(1), "≤ 6")}{tile(t.metrics.p95, (m.latencyP95 / 1000).toFixed(1), "≤ 15")}
+        {tile(t.metrics.error, pct(m.errorRate), "≤ 2%")}{tile(t.metrics.tokens, m.tokens.toLocaleString())}</div>
+      {m.declinedQuestions.length > 0 && <div><div className="mb-1 text-sm font-medium">{t.metrics.declinedQ}</div><ul className="list-inside list-disc text-sm text-muted-foreground">{m.declinedQuestions.map((d) => <li key={d.q}>{d.q} ({d.n})</li>)}</ul></div>}</>}</Card>;
+}
+
 export function Settings({ t, reloadMe }: { t: T; reloadMe: () => void }) {
   const [f, setF] = useState({ base_url: "", model: "", api_key: "" });
   const [hasKey, setHasKey] = useState(false);
@@ -28,5 +47,6 @@ export function Settings({ t, reloadMe }: { t: T; reloadMe: () => void }) {
         <Btn variant="outline" disabled={busy || !f.base_url || !f.model} onClick={test}>{t.test}</Btn>
         {note && <span role="status" className="text-sm text-muted-foreground">{note}</span>}</div>
       <p className="text-xs text-muted-foreground">{t.aiOff}</p></Card>
+    <Metrics t={t} />
   </>;
 }
