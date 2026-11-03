@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "npm run typecheck && npm test",
-    "build": "vite build web"
+    "build": "vite build web",
+    "admin": "tsx src/cli/admin.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",

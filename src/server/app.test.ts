@@ -1,34 +1,193 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { openDb } from "./db.js";
+import { createUser, type Role } from "./auth.js";
 
-const post = (app: ReturnType<typeof createApp>, url: string, body: unknown) =>
-  app.request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const PW = "correct horse battery";
+type App = ReturnType<typeof createApp>;
 
-describe("API end to end", () => {
+async function setup() {
+  const db = openDb(":memory:");
+  const hr = Number(db.prepare("INSERT INTO departments (name) VALUES ('HR')").run().lastInsertRowid);
+  const fin = Number(db.prepare("INSERT INTO departments (name) VALUES ('Finance')").run().lastInsertRowid);
+  const mk = (email: string, role: Role, departmentId?: number) => createUser(db, { email, name: email, role, departmentId, password: PW });
+  await Promise.all([mk("admin@x.id", "admin"), mk("dpo@x.id", "dpo"), mk("hr@x.id", "member", hr), mk("fin@x.id", "member", fin), mk("aud@x.id", "auditor")]);
+  return { db, app: createApp(db), hr, fin };
+}
+
+const call = (app: App, url: string, o: { method?: string; body?: unknown; cookie?: string } = {}) =>
+  app.request(url, { method: o.method ?? (o.body ? "POST" : "GET"), headers: { "content-type": "application/json", "x-requested-with": "patuh", ...(o.cookie ? { cookie: o.cookie } : {}) },
+    body: o.body ? JSON.stringify(o.body) : undefined });
+
+async function login(app: App, email: string, password = PW) {
+  const r = await call(app, "/api/auth/login", { body: { email, password } });
+  return { status: r.status, cookie: (r.headers.get("set-cookie") ?? "").split(";")[0] };
+}
+const json = async <T = any>(r: Response) => (await r.json()) as T;
+
+describe("sign-in", () => {
+  it("rejects wrong passwords and unknown users the same way", async () => {
+    const { app } = await setup();
+    expect((await login(app, "admin@x.id", "wrong password!!")).status).toBe(401);
+    expect((await login(app, "nobody@x.id")).status).toBe(401);
+  });
+  it("needs a session for everything except sign-in", async () => {
+    const { app } = await setup();
+    for (const url of ["/api/dashboard", "/api/activities", "/api/departments", "/api/criteria", "/api/auth/me"]) expect((await call(app, url)).status).toBe(401);
+    expect((await call(app, "/api/auth/config")).status).toBe(200);
+  });
+  it("login -> me -> logout kills the session", async () => {
+    const { app } = await setup();
+    const { status, cookie } = await login(app, "ADMIN@x.id"); // email is case-insensitive
+    expect(status).toBe(200);
+    const me = await json(await call(app, "/api/auth/me", { cookie }));
+    expect(me.user).toMatchObject({ email: "admin@x.id", role: "admin" });
+    await call(app, "/api/auth/logout", { method: "POST", cookie });
+    expect((await call(app, "/api/auth/me", { cookie })).status).toBe(401);
+  });
+  it("session cookie is HttpOnly and SameSite", async () => {
+    const { app } = await setup();
+    const r = await call(app, "/api/auth/login", { body: { email: "admin@x.id", password: PW } });
+    expect(r.headers.get("set-cookie")).toMatch(/HttpOnly/i);
+    expect(r.headers.get("set-cookie")).toMatch(/SameSite=Lax/i);
+  });
+  it("locks an account after repeated failures", async () => {
+    const { app } = await setup();
+    for (let i = 0; i < 5; i++) await login(app, "lockme@x.id", "nope nope nope");
+    expect((await login(app, "lockme@x.id")).status).toBe(429);
+  });
+  it("a disabled user's session stops working", async () => {
+    const { app, db } = await setup();
+    const { cookie } = await login(app, "aud@x.id");
+    db.prepare("UPDATE users SET disabled=1 WHERE email='aud@x.id'").run();
+    expect((await call(app, "/api/dashboard", { cookie })).status).toBe(401);
+    expect((await login(app, "aud@x.id")).status).toBe(401);
+  });
+  it("SSO-only users cannot sign in with a password", async () => {
+    const { app, db } = await setup();
+    await createUser(db, { email: "sso@x.id", name: "Sso", role: "auditor", password: null });
+    expect((await login(app, "sso@x.id", PW)).status).toBe(401);
+  });
+});
+
+describe("browser protections", () => {
+  it("rejects state changes without the CSRF header", async () => {
+    const { app } = await setup();
+    const { cookie } = await login(app, "admin@x.id");
+    const r = await app.request("/api/departments", { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ name: "X" }) });
+    expect(r.status).toBe(403);
+  });
+  it("sends security headers", async () => {
+    const { app } = await setup();
+    const h = (await call(app, "/api/auth/config")).headers;
+    expect(h.get("content-security-policy")).toContain("default-src 'self'");
+    expect(h.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(h.get("x-content-type-options")).toBe("nosniff");
+  });
+});
+
+describe("permissions", () => {
+  it("members only see and change their own department", async () => {
+    const { app, hr, fin } = await setup();
+    const admin = (await login(app, "admin@x.id")).cookie, hrUser = (await login(app, "hr@x.id")).cookie, finUser = (await login(app, "fin@x.id")).cookie;
+    const hrAct = (await json(await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "CV screening" } }))).id;
+    const finAct = (await json(await call(app, "/api/activities", { cookie: admin, body: { department_id: fin, name: "Credit scoring" } }))).id;
+
+    expect((await json(await call(app, "/api/activities", { cookie: hrUser }))).map((a: any) => a.name)).toEqual(["CV screening"]);
+    expect((await json(await call(app, "/api/departments", { cookie: hrUser }))).length).toBe(1);
+    expect((await json(await call(app, "/api/dashboard", { cookie: hrUser }))).length).toBe(1);
+    // another department is invisible (404, not 403) for every route that takes an id
+    expect((await call(app, `/api/activities/${finAct}`, { method: "PATCH", cookie: hrUser, body: { name: "x" } })).status).toBe(404);
+    expect((await call(app, `/api/activities/${finAct}/risks`, { cookie: hrUser })).status).toBe(404);
+    expect((await call(app, `/api/activities/${finAct}/risks`, { cookie: hrUser, body: { title: "r", likelihood: 1, severity: 1 } })).status).toBe(404);
+    expect((await call(app, `/api/activities/${finAct}/dpia.docx`, { cookie: hrUser })).status).toBe(404);
+    expect((await call(app, "/api/activities", { cookie: hrUser, body: { department_id: fin, name: "sneaky" } })).status).toBe(404);
+    // and the owner of that department still works
+    expect((await call(app, `/api/activities/${finAct}`, { method: "PATCH", cookie: finUser, body: { purpose: "ok" } })).status).toBe(200);
+    expect(hrAct).toBeGreaterThan(0);
+  });
+  it("members cannot reach risks and controls of another department by id", async () => {
+    const { app, fin } = await setup();
+    const admin = (await login(app, "admin@x.id")).cookie, hrUser = (await login(app, "hr@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: admin, body: { department_id: fin, name: "Credit" } }))).id;
+    const risk = (await json(await call(app, `/api/activities/${act}/risks`, { cookie: admin, body: { title: "Unfair", likelihood: 3, severity: 4 } }))).id;
+    const ctl = (await json(await call(app, `/api/risks/${risk}/controls`, { cookie: admin, body: { title: "Review" } }))).id;
+    expect((await call(app, `/api/risks/${risk}`, { method: "PATCH", cookie: hrUser, body: { residual_likelihood: 1 } })).status).toBe(404);
+    expect((await call(app, `/api/risks/${risk}/controls`, { cookie: hrUser, body: { title: "x" } })).status).toBe(404);
+    expect((await call(app, `/api/controls/${ctl}`, { method: "PATCH", cookie: hrUser, body: { status: "done" } })).status).toBe(404);
+  });
+  it("auditors read everything and change nothing", async () => {
+    const { app, hr } = await setup();
+    const admin = (await login(app, "admin@x.id")).cookie, aud = (await login(app, "aud@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: admin, body: { department_id: hr, name: "A" } }))).id;
+    expect((await call(app, "/api/activities", { cookie: aud })).status).toBe(200);
+    expect((await call(app, `/api/activities/${act}/dpia.docx`, { cookie: aud })).status).toBe(200);
+    expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: aud, body: { purpose: "x" } })).status).toBe(403);
+    expect((await call(app, "/api/activities", { cookie: aud, body: { department_id: hr, name: "B" } })).status).toBe(403);
+    expect((await call(app, "/api/departments", { cookie: aud, body: { name: "New" } })).status).toBe(403);
+  });
+  it("only admin or DPO can fill in sign-off fields", async () => {
+    const { app, hr } = await setup();
+    const hrUser = (await login(app, "hr@x.id")).cookie, dpo = (await login(app, "dpo@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "A" } }))).id;
+    expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: { signed_by: "Me" } })).status).toBe(403);
+    expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: { dpo_advice: "fine" } })).status).toBe(403);
+    expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "DPO" } })).status).toBe(200);
+    expect((await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "B", signed_by: "Me" } })).status).toBe(403);
+  });
+});
+
+describe("workflow and validation", () => {
   it("register -> risk -> control -> dashboard -> DPIA docx (en + id)", async () => {
-    const app = createApp(openDb(":memory:"));
-    const dep = (await (await post(app, "/api/departments", { name: "HR" })).json()) as { id: number };
-    const act = (await (await post(app, "/api/activities", { department_id: dep.id, name: "CV screening with LLM",
-      screening: ["new-technology", "scoring-monitoring"], cross_border: 1 })).json()) as { id: number };
-    const risk = (await (await post(app, `/api/activities/${act.id}/risks`, { title: "Biased ranking", likelihood: 3, severity: 4 })).json()) as { id: number };
-    expect((await post(app, `/api/risks/${risk.id}/controls`, { title: "Human review of every rejection" })).status).toBe(201);
-
-    const dash = (await (await app.request("/api/dashboard")).json()) as Record<string, unknown>[];
-    expect(dash[0]).toMatchObject({ dpiaRequired: true, basis: "uu-pdp", risks: 1, openControls: 1, consultation: true });
-
+    const { app } = await setup();
+    const admin = (await login(app, "admin@x.id")).cookie;
+    const dep = (await json(await call(app, "/api/departments", { cookie: admin, body: { name: "Ops" } }))).id;
+    const act = (await json(await call(app, "/api/activities", { cookie: admin, body: { department_id: dep, name: "CV screening with LLM", screening: ["new-technology", "scoring-monitoring"], cross_border: 1 } }))).id;
+    const risk = (await json(await call(app, `/api/activities/${act}/risks`, { cookie: admin, body: { title: "Biased ranking", likelihood: 3, severity: 4 } }))).id;
+    expect((await call(app, `/api/risks/${risk}/controls`, { cookie: admin, body: { title: "Human review", due: "2026-12-15" } })).status).toBe(201);
+    expect((await json(await call(app, "/api/dashboard", { cookie: admin })))[0]).toMatchObject({ dpiaRequired: true, basis: "uu-pdp", risks: 1, openControls: 1, consultation: true });
     for (const lang of ["en", "id"]) {
-      const res = await app.request(`/api/activities/${act.id}/dpia.docx?lang=${lang}`);
+      const res = await call(app, `/api/activities/${act}/dpia.docx?lang=${lang}`, { cookie: admin });
       expect(res.status).toBe(200);
       const bytes = new Uint8Array(await res.arrayBuffer());
       expect(String.fromCharCode(bytes[0], bytes[1])).toBe("PK"); // a .docx is a zip
     }
   });
-
   it("rejects bad input", async () => {
-    const app = createApp(openDb(":memory:"));
-    expect((await post(app, "/api/departments", {})).status).toBe(400);
-    expect((await post(app, "/api/activities", { name: "x" })).status).toBe(400);
-    expect((await app.request("/api/activities/999/dpia.docx")).status).toBe(404);
+    const { app, hr } = await setup();
+    const admin = (await login(app, "admin@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: admin, body: { department_id: hr, name: "A" } }))).id;
+    const risk = (await json(await call(app, `/api/activities/${act}/risks`, { cookie: admin, body: { title: "R", likelihood: 1, severity: 1 } }))).id;
+    const bad = async (url: string, method: string, body: unknown) => (await call(app, url, { cookie: admin, method, body })).status;
+    expect(await bad("/api/departments", "POST", {})).toBe(400);
+    expect(await bad("/api/departments", "POST", { name: "HR" })).toBe(400); // duplicate
+    expect(await bad("/api/activities", "POST", { name: "x" })).toBe(400);
+    expect(await bad("/api/activities", "POST", { department_id: 999, name: "x" })).toBe(404);
+    expect(await bad(`/api/activities/${act}`, "PATCH", { screening: ["made-up"] })).toBe(400);
+    expect(await bad(`/api/activities/${act}`, "PATCH", { review_date: "tomorrow" })).toBe(400);
+    expect(await bad(`/api/activities/${act}`, "PATCH", { purpose: "x".repeat(5001) })).toBe(400);
+    expect(await bad(`/api/activities/${act}`, "PATCH", { cross_border: 7 })).toBe(400);
+    expect(await bad(`/api/activities/${act}`, "PATCH", { purpose: 12 })).toBe(400);
+    expect(await bad(`/api/activities/${act}/risks`, "POST", { title: "r", likelihood: 9, severity: 1 })).toBe(400);
+    expect(await bad(`/api/risks/${risk}`, "PATCH", { residual_likelihood: 0 })).toBe(400);
+    expect(await bad(`/api/risks/${risk}/controls`, "POST", { title: "c", status: "bogus" })).toBe(400);
+    expect(await bad(`/api/risks/${risk}/controls`, "POST", { title: "c", due: "soon" })).toBe(400);
+    expect((await call(app, "/api/activities/999/dpia.docx", { cookie: admin })).status).toBe(404);
+    expect((await call(app, "/api/activities/abc/risks", { cookie: admin })).status).toBe(404);
+  });
+  it("ignores unknown fields instead of putting them in SQL", async () => {
+    const { app, hr, db } = await setup();
+    const admin = (await login(app, "admin@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: admin, body: { department_id: hr, name: "A" } }))).id;
+    expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: admin, body: { "name=1; DROP TABLE users; --": "x", demo: 1 } })).status).toBe(200);
+    expect((db.prepare("SELECT demo FROM activities WHERE id=?").get(act) as { demo: number }).demo).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) n FROM users").get()).toMatchObject({ n: 5 });
+  });
+  it("writes an audit trail without request bodies", async () => {
+    const { app, db } = await setup();
+    await login(app, "admin@x.id", "wrong password!!");
+    const rows = db.prepare("SELECT method,path,status FROM audit_log").all();
+    expect(rows).toContainEqual({ method: "POST", path: "/api/auth/login", status: 401 });
+    expect(JSON.stringify(rows)).not.toContain("wrong password");
   });
 });

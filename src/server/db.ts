@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS departments (
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, demo INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS activities (
   id INTEGER PRIMARY KEY,
   department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS activities (
   ai_system TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
   data_location TEXT NOT NULL DEFAULT '', cross_border INTEGER NOT NULL DEFAULT 0,
   legal_basis TEXT NOT NULL DEFAULT '', retention TEXT NOT NULL DEFAULT '',
-  necessity TEXT NOT NULL DEFAULT '',
+  necessity TEXT NOT NULL DEFAULT '', demo INTEGER NOT NULL DEFAULT 0,
   screening TEXT NOT NULL DEFAULT '[]',
   dpo_advice TEXT NOT NULL DEFAULT '', subjects_views TEXT NOT NULL DEFAULT '',
   review_date TEXT NOT NULL DEFAULT '', signed_by TEXT NOT NULL DEFAULT '',
@@ -31,6 +31,24 @@ CREATE TABLE IF NOT EXISTS controls (
   risk_id INTEGER NOT NULL REFERENCES risks(id) ON DELETE CASCADE,
   title TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', due TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned','in-progress','done')));
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE, name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin','dpo','member','auditor')),
+  department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+  password_hash TEXT, -- NULL = single sign-on only
+  disabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS oidc_flows (
+  state_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, verifier TEXT NOT NULL, expires_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY, at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, email TEXT NOT NULL DEFAULT '',
+  method TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS tutorial_progress (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, tour_id TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, tour_id));
 `;
 
 export function openDb(path: string): DatabaseSync {
@@ -58,3 +76,8 @@ export function updateActivity(db: DatabaseSync, id: number, input: Row): void {
   db.prepare(`UPDATE activities SET ${cols.map((c) => `${c}=?`).join(",")} WHERE id=?`)
     .run(...cols.map((c) => input[c] as string | number), id);
 }
+
+export const getSetting = (db: DatabaseSync, key: string): string | undefined =>
+  (db.prepare("SELECT value FROM settings WHERE key=?").get(key) as { value: string } | undefined)?.value;
+export const setSetting = (db: DatabaseSync, key: string, value: string) =>
+  void db.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value);
