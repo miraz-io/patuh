@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, canSignOff, canWriteDept, onError, onSignedOut, type Me } from "./api.js";
 import { TXT, type Lang, type T } from "./i18n.js";
 import { ControlsChart, DepartmentChart, PipelineChart, RiskChart, type Overview } from "./Charts.js";
+import { ChatBubble } from "./Chat.js";
 import { Login } from "./Login.js";
+import { Settings } from "./Settings.js";
 import { TourPlayer } from "./Tour.js";
 import { TOURS, type Page, type Tour } from "./tours.js";
 import { Badge, Btn, Card, inputCls } from "./ui.js";
@@ -11,7 +13,7 @@ type Criterion = { id: string; uu?: string; en: string; id_: string; gdpr: strin
 type Dept = { id: number; name: string };
 type Activity = Record<string, any> & { id: number; name: string; department: string; department_id: number; screening: string[] };
 type DashRow = { id: number; name: string; department: string; dpiaRequired: boolean; basis: string; risks: number; openControls: number; consultation: boolean };
-type Nav = "dashboard" | "processes" | "tutorials";
+type Nav = "dashboard" | "processes" | "tutorials" | "settings";
 
 export function App() {
   const [lang, setLang] = useState<Lang>(() => (navigator.language.startsWith("id") ? "id" : "en"));
@@ -19,6 +21,7 @@ export function App() {
   const [error, setError] = useState("");
   const [page, setPage] = useState<Nav>("dashboard");
   const [open, setOpen] = useState<number | null>(null);
+  const [fresh, setFresh] = useState<number | null>(null); // process just drafted by AI
   const [depts, setDepts] = useState<Dept[]>([]);
   const [acts, setActs] = useState<Activity[]>([]);
   const [dash, setDash] = useState<DashRow[]>([]);
@@ -57,7 +60,7 @@ export function App() {
   if (me === null) return <Login lang={lang} setLang={setLang} done={loadMe} />;
 
   const nav = (p: Nav) => { setPage(p); setOpen(null); };
-  const items: Nav[] = me.demo ? ["dashboard", "processes", "tutorials"] : ["dashboard", "processes"];
+  const items: Nav[] = [...(me.demo ? ["dashboard", "processes", "tutorials"] as const : ["dashboard", "processes"] as const), ...(me.user.role === "admin" ? ["settings" as const] : [])];
   const signOut = async () => { await api("/api/auth/logout", "POST").catch(() => {}); setMe(null); setOpen(null); setPage("dashboard"); };
   const activity = open !== null ? acts.find((a) => a.id === open) : undefined;
 
@@ -80,8 +83,9 @@ export function App() {
         {error && <div role="alert" className="flex items-center justify-between bg-red-500/15 px-6 py-2 text-sm text-red-600">{error}<button onClick={() => setError("")} aria-label="Close">×</button></div>}
         <div className="mx-auto max-w-5xl space-y-6 p-6">
           {page === "dashboard" && <Dashboard rows={dash} overview={overview} t={t} me={me} tourAct={tourAct} go={(id) => { setPage("processes"); setOpen(id); }} startWelcome={() => play(TOURS[0])} />}
-          {page === "processes" && open === null && <List acts={acts} dash={dash} depts={depts} me={me} t={t} tourAct={tourAct} reload={load} go={setOpen} />}
-          {page === "processes" && activity && <Detail key={open} act={activity} me={me} criteria={criteria} lang={lang} t={t} reload={load} back={() => setOpen(null)} />}
+          {page === "processes" && open === null && <List acts={acts} dash={dash} depts={depts} me={me} t={t} lang={lang} tourAct={tourAct} reload={load} go={(id, drafted) => { setFresh(drafted ? id : null); setOpen(id); }} openSettings={() => nav("settings")} />}
+          {page === "processes" && activity && <Detail key={open} act={activity} me={me} criteria={criteria} lang={lang} t={t} reload={load} fresh={fresh === open} back={() => setOpen(null)} />}
+          {page === "settings" && me.user.role === "admin" && <Settings t={t} reloadMe={loadMe} />}
           {page === "tutorials" && <Tutorials me={me} lang={lang} t={t} play={play} />}
         </div>
       </main>
@@ -119,19 +123,34 @@ function Dashboard({ rows, overview, t, me, tourAct, go, startWelcome }: { rows:
   </>;
 }
 
-function List({ acts, dash, depts, me, t, tourAct, reload, go }: { acts: Activity[]; dash: DashRow[]; depts: Dept[]; me: Me; t: T; tourAct: number | null; reload: () => void; go: (id: number) => void }) {
-  const [dept, setDept] = useState(""); const [name, setName] = useState(""); const [procDept, setProcDept] = useState<number>(0);
+function List({ acts, dash, depts, me, t, lang, tourAct, reload, go, openSettings }: { acts: Activity[]; dash: DashRow[]; depts: Dept[]; me: Me; t: T; lang: Lang; tourAct: number | null; reload: () => void; go: (id: number, drafted?: boolean) => void; openSettings: () => void }) {
+  const [dept, setDept] = useState(""); const [name, setName] = useState(""); const [desc, setDesc] = useState(""); const [procDept, setProcDept] = useState<number>(0);
+  const [busy, setBusy] = useState(false);
   const dpiaOf = (id: number) => dash.find((d) => d.id === id)?.dpiaRequired;
   const writable = depts.filter((d) => canWriteDept(me, d.id));
   const admin = canSignOff(me);
+  const create = async (ai: boolean) => {
+    setBusy(true);
+    try {
+      const r = await api<{ id: number }>(ai ? "/api/activities/ai" : "/api/activities", "POST", { name, department_id: procDept, ...(ai ? { description: desc, lang } : {}) });
+      setName(""); setDesc(""); await reload(); go(r.id, ai);
+    } catch { /* the error banner shows the reason; the form keeps what was typed */ } finally { setBusy(false); }
+  };
   return <>
-    {(admin || writable.length > 0) && <Card data-tour="new-process" className="flex flex-wrap items-end gap-3">
-      {admin && <><input className={`${inputCls} max-w-52`} placeholder={t.dept} maxLength={200} value={dept} onChange={(e) => setDept(e.target.value)} />
-        <Btn variant="outline" disabled={!dept.trim()} onClick={async () => { await api("/api/departments", "POST", { name: dept }); setDept(""); reload(); }}>{t.addDept}</Btn></>}
-      <select className={`${inputCls} max-w-52`} value={procDept} onChange={(e) => setProcDept(Number(e.target.value))}>
-        <option value={0}>{t.dept}…</option>{writable.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
-      <input className={`${inputCls} max-w-64`} placeholder={t.name} maxLength={200} value={name} onChange={(e) => setName(e.target.value)} />
-      <Btn disabled={!name.trim() || !procDept} onClick={async () => { const r = await api<{ id: number }>("/api/activities", "POST", { name, department_id: procDept }); setName(""); await reload(); go(r.id); }}>{t.newProc}</Btn>
+    {admin && <Card className="flex flex-wrap items-end gap-3"><input className={`${inputCls} max-w-52`} placeholder={t.dept} maxLength={200} value={dept} onChange={(e) => setDept(e.target.value)} />
+      <Btn variant="outline" disabled={!dept.trim()} onClick={async () => { await api("/api/departments", "POST", { name: dept }); setDept(""); reload(); }}>{t.addDept}</Btn></Card>}
+    {writable.length > 0 && <Card data-tour="new-process" className="space-y-3">
+      <div className="flex flex-wrap gap-3">
+        <select className={`${inputCls} max-w-52`} value={procDept} onChange={(e) => setProcDept(Number(e.target.value))}>
+          <option value={0}>{t.dept}…</option>{writable.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
+        <input className={`${inputCls} min-w-48 flex-1`} placeholder={t.name} maxLength={200} value={name} onChange={(e) => setName(e.target.value)} /></div>
+      <label className="block text-sm"><span className="mb-1 block font-medium">{t.newDesc}</span>
+        <textarea rows={4} maxLength={4000} className={`${inputCls} w-full`} value={desc} onChange={(e) => setDesc(e.target.value)} />
+        <span className="mt-1 block text-xs text-muted-foreground">{t.newDescHint}</span></label>
+      <div className="flex flex-wrap items-center gap-3">
+        <Btn disabled={busy || !me.ai || !name.trim() || !desc.trim() || !procDept} onClick={() => create(true)}>{busy ? t.creating : t.createAi}</Btn>
+        <Btn variant="outline" disabled={busy || !name.trim() || !procDept} onClick={() => create(false)}>{t.createEmpty}</Btn>
+        {!me.ai && <span className="text-sm text-muted-foreground">{t.aiMissing} {me.user.role === "admin" ? <button className="underline" onClick={openSettings}>{t.aiMissingAdmin}</button> : t.aiMissingOther}</span>}</div>
     </Card>}
     <div data-tour="process-list" className="space-y-2">{acts.map((a) => <Card key={a.id} data-tour={a.id === tourAct ? "proc-first" : undefined} onClick={() => go(a.id)} className="flex cursor-pointer items-center justify-between py-3 hover:bg-muted">
       <div><div className="font-medium">{a.name}</div><div className="text-sm text-muted-foreground">{a.department}</div></div>
@@ -142,7 +161,7 @@ function List({ acts, dash, depts, me, t, tourAct, reload, go }: { acts: Activit
 
 type RiskData = { id: number; title: string; likelihood: number; severity: number; residual_likelihood: number | null; residual_severity: number | null; controls: { id: number; title: string; owner: string; due: string; status: string }[] };
 
-function Detail({ act, me, criteria, lang, t, reload, back }: { act: Activity; me: Me; criteria: Criterion[]; lang: Lang; t: T; reload: () => void; back: () => void }) {
+function Detail({ act, me, criteria, lang, t, reload, back, fresh }: { act: Activity; me: Me; criteria: Criterion[]; lang: Lang; t: T; reload: () => void; back: () => void; fresh: boolean }) {
   const [risks, setRisks] = useState<RiskData[]>([]);
   const [form, setForm] = useState({ title: "", l: 2, s: 2 });
   const ro = !canWriteDept(me, act.department_id), signoff = canSignOff(me);
@@ -157,16 +176,17 @@ function Detail({ act, me, criteria, lang, t, reload, back }: { act: Activity; m
       <div data-tour="export" className="flex gap-2">{(["en", "id"] as const).map((l) => <a key={l} href={`/api/activities/${act.id}/dpia.docx?lang=${l}`}><Btn variant={l === lang ? "primary" : "outline"}>{l === "en" ? t.exportEn : t.exportId}</Btn></a>)}</div></div>
     <h1 className="text-2xl font-semibold">{act.name} <span className="text-base font-normal text-muted-foreground">· {act.department}</span></h1>
     {ro && <p className="rounded-md bg-muted p-3 text-sm">{t.readOnly}</p>}
+    {fresh && !ro && <p role="status" className="rounded-md bg-amber-500/15 p-3 text-sm text-amber-600">{t.drafted}</p>}
     <fieldset disabled={ro} className="space-y-6">
       <Card data-tour="screening"><h2 className="mb-3 font-medium">{t.screening}</h2>
         {criteria.map((c) => <label key={c.id} className="flex items-start gap-3 py-1.5 text-sm">
-          <input type="checkbox" className="mt-1" defaultChecked={ticked.has(c.id)} onChange={() => toggle(c.id)} />
+          <input key={`${c.id}${ticked.has(c.id)}`} type="checkbox" className="mt-1" defaultChecked={ticked.has(c.id)} onChange={() => toggle(c.id)} />
           <span>{lang === "en" ? c.en : c.id_} <span className="text-xs text-muted-foreground">{c.uu ? `UU PDP 34(2)${c.uu} · ` : ""}{c.gdpr}</span></span></label>)}</Card>
       <Card data-tour="details" className="space-y-3"><h2 className="font-medium">{t.details}</h2>
         {Object.entries(t.fields).map(([k, label]) => <label key={k} className="block text-sm"><span className="mb-1 block text-muted-foreground">{label}</span>
-          <textarea rows={k === "review_date" || k === "signed_by" ? 1 : 2} maxLength={5000} disabled={ro || ((k === "dpo_advice" || k === "signed_by") && !signoff)} className={`${inputCls} w-full disabled:opacity-60`}
+          <textarea key={`${k}:${act[k] ?? ""}`} rows={k === "review_date" || k === "signed_by" ? 1 : 2} maxLength={5000} disabled={ro || ((k === "dpo_advice" || k === "signed_by") && !signoff)} className={`${inputCls} w-full disabled:opacity-60`}
             defaultValue={act[k] ?? ""} onBlur={(e) => e.target.value !== (act[k] ?? "") && save({ [k]: e.target.value }).catch(() => { e.target.value = act[k] ?? ""; })} /></label>)}
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked={!!act.cross_border} onChange={(e) => save({ cross_border: e.target.checked ? 1 : 0 })} />{t.crossBorder}</label></Card>
+        <label className="flex items-center gap-2 text-sm"><input key={`cb${act.cross_border}`} type="checkbox" defaultChecked={!!act.cross_border} onChange={(e) => save({ cross_border: e.target.checked ? 1 : 0 })} />{t.crossBorder}</label></Card>
       <Card data-tour="risks" className="space-y-4"><h2 className="font-medium">{t.risksH}</h2>
         {risks.map((r, n) => <RiskBlock key={r.id} r={r} first={n === 0} t={t} reload={() => { loadRisks().catch(() => {}); reload(); }} />)}
         <div className="flex flex-wrap items-end gap-2 border-t pt-4">
@@ -175,6 +195,7 @@ function Detail({ act, me, criteria, lang, t, reload, back }: { act: Activity; m
           <label className="text-xs">{t.severity}<input type="number" min={1} max={4} className={`${inputCls} block w-20`} value={form.s} onChange={(e) => setForm({ ...form, s: Number(e.target.value) })} /></label>
           <Btn disabled={!form.title.trim()} onClick={async () => { await api(`/api/activities/${act.id}/risks`, "POST", { title: form.title, likelihood: form.l, severity: form.s }); setForm({ ...form, title: "" }); loadRisks(); reload(); }}>{t.addRisk}</Btn></div></Card>
     </fieldset>
+    {!ro && me.ai && <ChatBubble actId={act.id} lang={lang} t={t} changed={() => { loadRisks().catch(() => {}); reload(); }} />}
   </>;
 }
 
@@ -187,8 +208,8 @@ function RiskBlock({ r, first, t, reload }: { r: RiskData; first: boolean; t: T;
   const setRes = async (k: "residual_likelihood" | "residual_severity", v: number) => { await api(`/api/risks/${r.id}`, "PATCH", { [k]: v }); reload(); };
   return <div data-tour={first ? "risk-first" : undefined} className="rounded-md border p-3">
     <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{r.title}</span><Badge tone={tone}>{n}</Badge>→<Badge tone={rt}>{rn}</Badge>
-      <label className="ml-auto text-xs">{t.resL}<input type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_likelihood ?? ""} onBlur={(e) => e.target.value && setRes("residual_likelihood", Number(e.target.value))} /></label>
-      <label className="text-xs">{t.resS}<input type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_severity ?? ""} onBlur={(e) => e.target.value && setRes("residual_severity", Number(e.target.value))} /></label></div>
+      <label className="ml-auto text-xs">{t.resL}<input key={`rl${r.residual_likelihood}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_likelihood ?? ""} onBlur={(e) => e.target.value && setRes("residual_likelihood", Number(e.target.value))} /></label>
+      <label className="text-xs">{t.resS}<input key={`rs${r.residual_severity}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_severity ?? ""} onBlur={(e) => e.target.value && setRes("residual_severity", Number(e.target.value))} /></label></div>
     <ul data-tour={first ? "controls-first" : undefined} className="my-2 space-y-1 text-sm">{r.controls.map((k) => <li key={k.id} className="flex flex-wrap items-center gap-2">
       <select className="rounded-md border bg-background px-1 text-xs" value={k.status} onChange={async (e) => { await api(`/api/controls/${k.id}`, "PATCH", { status: e.target.value }); reload(); }}>
         {["planned", "in-progress", "done"].map((s) => <option key={s}>{s}</option>)}</select>{k.title}

@@ -40,6 +40,16 @@ npm run admin -- demo load
 npm run admin -- demo remove   # removes only the demo; your own processes and departments stay
 ```
 
+## AI assistant (optional)
+
+Admins open **Settings** and enter any OpenAI-compatible service: an API address (for example `https://api.openai.com/v1` or `http://localhost:11434/v1` for Ollama), a model name and, if needed, an API key.
+
+- **New process:** people only type the process name and a short description. Patuh drafts the details, DPIA screening, risks and controls for them to review.
+- **Chat bubble** (bottom right of a process): ask questions or say what to change ("retention is 5 years"). The assistant edits the record and lists what it changed. Manual editing still works.
+- The assistant never writes the DPO advice or sign-off fields, and an edit by someone who cannot sign off withdraws an earlier sign-off, just like a manual edit.
+- **Privacy:** the process description and record are sent to the service you configure and may contain personal data. Choose a provider that fits your own rules, or host a model yourself.
+- The API key is stored in the database file (permissions 0600) and is never sent back to the browser.
+
 ## People and sign-in
 
 | Role | Can do |

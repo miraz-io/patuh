@@ -1,7 +1,7 @@
 export type Role = "admin" | "dpo" | "member" | "auditor";
 export type Me = {
   user: { id: number; email: string; name: string; role: Role; department_id: number | null };
-  org: string; demo: boolean; tourActivityId: number | null; completedTours: string[];
+  org: string; demo: boolean; ai: boolean; tourActivityId: number | null; completedTours: string[];
 };
 
 const hooks = { error: (_m: string) => {}, signedOut: () => {} };

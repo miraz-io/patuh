@@ -6,7 +6,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { CRITERIA, screen } from "../core/screening.js";
 import { needsPriorConsultation, riskLevel } from "../core/risk.js";
 import { dpiaBuffer, type Activity, type Lang, type RiskRow } from "../core/dpia.js";
-import { createActivity, getSetting, updateActivity } from "./db.js";
+import { createActivity, getSetting, setSetting, updateActivity } from "./db.js";
+import { AiError, aiConfig, applyChat, chatMessages, complete, createFromDraft, draftMessages, extractJson, type AiConfig, type Turn } from "./ai.js";
 import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, createSession, endSession, findUserByEmail,
   isLocked, recordFail, userForSession, verifyPassword, type User } from "./auth.js";
 import { finishLogin, startLogin, userForSso, type OidcConfig } from "./oidc.js";
@@ -16,11 +17,11 @@ import { SIGNOFF_FIELDS, cleanActivity, date, text } from "./validate.js";
 
 type Env = { Variables: { user: User } };
 type Q = Record<string, string | number | null>;
-export type AppOptions = { oidc?: OidcConfig | null; secureCookies?: boolean };
+export type AppOptions = { oidc?: OidcConfig | null; secureCookies?: boolean; aiFetch?: typeof fetch };
 
 const all = (db: DatabaseSync, sql: string, ...a: (string | number)[]) => db.prepare(sql).all(...a) as Q[];
 const one = (db: DatabaseSync, sql: string, ...a: (string | number)[]) => db.prepare(sql).get(...a) as Q | undefined;
-const err = (c: Context, status: 400 | 401 | 403 | 404 | 429, msg: string) => c.json({ error: msg }, status);
+const err = (c: Context, status: 400 | 401 | 403 | 404 | 429 | 502, msg: string) => c.json({ error: msg }, status);
 const body = async (c: Context) => ((await c.req.json().catch(() => null)) ?? null) as Record<string, unknown> | null;
 const isObj = (b: unknown): b is Record<string, unknown> => !!b && typeof b === "object" && !Array.isArray(b);
 const int = (v: string) => (/^\d{1,9}$/.test(v) ? Number(v) : NaN);
@@ -28,7 +29,7 @@ const int = (v: string) => (/^\d{1,9}$/.test(v) ? Number(v) : NaN);
 export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
   const app = new Hono<Env>();
   const oidc = opts.oidc ?? null;
-  let hashing = 0;
+  let hashing = 0, aiBusy = 0;
   const cookieOpts = { httpOnly: true, sameSite: "Lax" as const, secure: !!opts.secureCookies, path: "/" };
 
   app.use("*", secureHeaders({
@@ -119,7 +120,7 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     const demo = demoLoaded(db);
     const tour = demo ? one(db, "SELECT id,department_id FROM activities WHERE demo=1 ORDER BY id LIMIT 1") : undefined;
     const tourId = tour && canRead(user, tour.department_id as number) ? tour.id : null;
-    return c.json({ user, org: getSetting(db, "org_name") ?? "", demo, tourActivityId: tourId,
+    return c.json({ user, org: getSetting(db, "org_name") ?? "", demo, ai: !!aiConfig(db), tourActivityId: tourId,
       completedTours: all(db, "SELECT tour_id FROM tutorial_progress WHERE user_id=?", user.id).map((r) => r.tour_id) });
   });
 
@@ -148,6 +149,75 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (!name) return err(c, 400, "name required");
     if (one(db, "SELECT id FROM departments WHERE name=?", name)) return err(c, 400, "department already exists");
     return c.json({ id: Number(db.prepare("INSERT INTO departments (name) VALUES (?)").run(name).lastInsertRowid) }, 201);
+  });
+
+  // ---------- AI assistant ----------
+  // ponytail: global cap on concurrent AI calls (each can run for a minute and costs money). Add per-user quotas if needed.
+  const withAi = async (c: Context, run: (cfg: AiConfig) => Promise<Response>) => {
+    const cfg = aiConfig(db);
+    if (!cfg) return err(c, 400, "AI is not set up yet. An admin can do that under Settings.");
+    if (aiBusy >= 4) return err(c, 429, "The AI is busy. Try again in a moment.");
+    aiBusy++;
+    try { return await run(cfg); }
+    catch (e) { return err(c, 502, e instanceof AiError ? e.message : "The AI request failed"); }
+    finally { aiBusy--; }
+  };
+  const langOf = (v: unknown): "en" | "id" => (v === "id" ? "id" : "en");
+
+  app.get("/api/settings", (c) => {
+    if (c.get("user").role !== "admin") return err(c, 403, "Only an admin can open settings");
+    return c.json({ ai: { base_url: getSetting(db, "ai_base_url") ?? "", model: getSetting(db, "ai_model") ?? "", hasKey: !!getSetting(db, "ai_api_key") } }); // the key is never sent back
+  });
+  app.put("/api/settings/ai", async (c) => {
+    if (c.get("user").role !== "admin") return err(c, 403, "Only an admin can change settings");
+    const b = await body(c); if (!isObj(b)) return err(c, 400, "invalid json");
+    const url = text(b.base_url, 300)?.trim(), model = text(b.model, 100)?.trim(), key = b.api_key === undefined ? undefined : text(b.api_key, 500)?.trim();
+    if (url === undefined || model === undefined || key === null) return err(c, 400, "base_url, model and api_key must be text");
+    if (url || model) { // both empty = switch AI off
+      let ok = false; try { ok = ["http:", "https:"].includes(new URL(url!).protocol); } catch { /* invalid */ }
+      if (!ok || !model) return err(c, 400, "Enter a full address starting with http:// or https://, and a model name");
+    }
+    setSetting(db, "ai_base_url", url); setSetting(db, "ai_model", model);
+    if (key !== undefined) setSetting(db, "ai_api_key", key); // "" removes it
+    return c.json({ ok: true });
+  });
+  app.post("/api/settings/ai/test", async (c) => {
+    if (c.get("user").role !== "admin") return err(c, 403, "Only an admin can change settings");
+    return await withAi(c, async (cfg) => c.json({ ok: true, reply: (await complete(cfg, [{ role: "user", content: "Reply with the single word OK." }], opts.aiFetch)).slice(0, 100) }));
+  });
+
+  // Describe a process in your own words; the AI drafts the whole record (details, screening, risks, controls) for review.
+  app.post("/api/activities/ai", async (c) => {
+    const u = c.get("user"), b = await body(c);
+    if (!isObj(b) || typeof b.department_id !== "number" || !Number.isInteger(b.department_id)) return err(c, 400, "name, description and department_id required");
+    if (!one(db, "SELECT id FROM departments WHERE id=?", b.department_id) || !canRead(u, b.department_id)) return err(c, 404, "department not found");
+    if (!canWrite(u, b.department_id)) return err(c, 403, "You cannot add processes to this department");
+    const name = text(b.name, 200)?.trim(), description = text(b.description, 4000)?.trim();
+    if (!name || !description) return err(c, 400, "name and description required");
+    const dept = b.department_id;
+    return withAi(c, async (cfg) => {
+      const raw = extractJson(await complete(cfg, draftMessages(name, description, langOf(b.lang)), opts.aiFetch));
+      return c.json({ id: createFromDraft(db, dept, name, description, raw) }, 201);
+    });
+  });
+
+  // Chat about one process: the AI answers and may edit the record (never the sign-off fields).
+  app.post("/api/activities/:id/chat", async (c) => {
+    const u = c.get("user"), id = int(c.req.param("id")), dept = deptOfActivity(id);
+    if (!readable(u, dept)) return err(c, 404, "not found");
+    if (!canWrite(u, dept)) return err(c, 403, "read-only");
+    const b = await body(c), message = isObj(b) ? text(b.message, 4000)?.trim() : null;
+    if (!isObj(b) || !message) return err(c, 400, "message required");
+    const history: Turn[] = (Array.isArray(b.history) ? b.history : []).slice(-10).flatMap((h): Turn[] =>
+      isObj(h) && (h.role === "user" || h.role === "assistant") && typeof h.content === "string" ? [{ role: h.role, content: h.content.slice(0, 4000) }] : []);
+    return withAi(c, async (cfg) => {
+      const row = one(db, "SELECT * FROM activities WHERE id=?", id)!;
+      const ctx = { name: row.name, ...Object.fromEntries(Object.keys(row).filter((k) => !["id", "department_id", "demo", "created_at", "dpo_advice", "signed_by", "name"].includes(k)).map((k) => [k, k === "screening" ? JSON.parse(row[k] as string) : row[k]])),
+        risks: all(db, "SELECT id,title,likelihood,severity,residual_likelihood,residual_severity FROM risks WHERE activity_id=? ORDER BY id", id).map((r) => ({ ...r, controls: all(db, "SELECT title,status FROM controls WHERE risk_id=?", r.id as number) })) };
+      const out = applyChat(db, id, extractJson(await complete(cfg, chatMessages(ctx, history, message, langOf(b.lang)), opts.aiFetch)));
+      if (out.applied.length && !canSignOff(u)) updateActivity(db, id, { signed_by: "" }); // same rule as a manual edit: changed content needs a fresh sign-off
+      return c.json(out);
+    });
   });
 
   const parseActivity = (r: Q) => ({ ...r, screening: JSON.parse(r.screening as string) });
