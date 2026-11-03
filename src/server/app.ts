@@ -214,7 +214,8 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
       const row = one(db, "SELECT * FROM activities WHERE id=?", id)!;
       const ctx = { name: row.name, ...Object.fromEntries(Object.keys(row).filter((k) => !["id", "department_id", "demo", "created_at", "dpo_advice", "signed_by", "name"].includes(k)).map((k) => [k, k === "screening" ? JSON.parse(row[k] as string) : row[k]])),
         risks: all(db, "SELECT id,title,likelihood,severity,residual_likelihood,residual_severity FROM risks WHERE activity_id=? ORDER BY id", id).map((r) => ({ ...r, controls: all(db, "SELECT title,status FROM controls WHERE risk_id=?", r.id as number) })) };
-      const out = applyChat(db, id, extractJson(await complete(cfg, chatMessages(ctx, history, message, langOf(b.lang)), opts.aiFetch)));
+      const lang = langOf(b.lang);
+      const out = applyChat(db, id, extractJson(await complete(cfg, chatMessages(ctx, history, message, lang), opts.aiFetch)), lang);
       if (out.applied.length && !canSignOff(u)) updateActivity(db, id, { signed_by: "" }); // same rule as a manual edit: changed content needs a fresh sign-off
       return c.json(out);
     });

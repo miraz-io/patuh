@@ -105,7 +105,7 @@ export function draftMessages(name: string, description: string, lang: Lang): Ms
 export type Turn = { role: "user" | "assistant"; content: string };
 export function chatMessages(ctx: unknown, history: Turn[], message: string, lang: Lang): Msg[] {
   return [{ role: "system", content: `${RULES(lang)}\nYou are chatting with the person who owns this process and can edit its record. Current record:\n<process>\n${JSON.stringify(ctx)}\n</process>
-Answer as {"reply": string, ...} where reply is a short answer for the person. To change the record, add only the keys you change:
+Answer as {"reply": string, ...}. "reply" is REQUIRED every time: one or two sentences telling the person what you answered or changed. To change the record, add only the keys you change:
 fields (object using the keys below), screening (the full new list), add_risks (array as below), risk_updates (array of {id, residual_likelihood, residual_severity} using risk ids above), add_controls (array of {risk_id, title}).
 If the person only asks a question, change nothing. Never touch sign-off fields (DPO advice, signed by).\n${KEYS}` },
     ...history, { role: "user", content: message }];
@@ -122,11 +122,11 @@ export function createFromDraft(db: DatabaseSync, departmentId: number, name: st
 
 export type Applied = { kind: "field" | "screening" | "risk" | "control"; label: string };
 
-export function applyChat(db: DatabaseSync, actId: number, raw: Record<string, unknown>): { reply: string; applied: Applied[] } {
-  const reply = clip(raw.reply, 4000) || "…";
+export function applyChat(db: DatabaseSync, actId: number, raw: Record<string, unknown>, lang: Lang = "en"): { reply: string; applied: Applied[] } {
+  const reply = clip(raw.reply, 4000) || (lang === "id" ? "Selesai." : "Done."); // some models forget the reply key
   const applied: Applied[] = [];
   inTx(db, () => {
-    const fields = draftFields({ ...(isObj(raw.fields) ? raw.fields : {}), screening: raw.screening });
+    const fields = draftFields({ ...raw, ...(isObj(raw.fields) ? raw.fields : {}), screening: raw.screening }); // some models put field keys at the top level instead of under "fields"
     updateActivity(db, actId, fields);
     for (const k of Object.keys(fields)) applied.push({ kind: k === "screening" ? "screening" : "field", label: k });
     const mine = new Set((db.prepare("SELECT id FROM risks WHERE activity_id=?").all(actId) as { id: number }[]).map((r) => r.id));

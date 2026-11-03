@@ -123,3 +123,14 @@ describe("process chat", () => {
     expect(sent[0].body.messages.map((m: any) => m.role)).toEqual(["system", "user"]);
   });
 });
+
+describe("lenient model output", () => {
+  it("accepts field keys at the top level, ignores sign-off keys there too", async () => {
+    const { call, hr, db } = await setup(() => reply('{"reply":"ok","retention":"3 months","signed_by":"AI","name":"x"}'));
+    await configure(call);
+    const id = Number(db.prepare("INSERT INTO activities (department_id,name) VALUES (?,?)").run(hr, "P").lastInsertRowid);
+    const r = await (await call("hr", `/api/activities/${id}/chat`, "POST", { message: "m" })).json();
+    expect(r.applied).toEqual([{ kind: "field", label: "retention" }]);
+    expect(db.prepare("SELECT name,retention,signed_by FROM activities WHERE id=?").get(id)).toEqual({ name: "P", retention: "3 months", signed_by: "" });
+  });
+});
