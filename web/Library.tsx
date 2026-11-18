@@ -22,10 +22,10 @@ export function UnitView({ uid, t, open }: { uid: string; t: T; open: (uid: stri
     <h3 className="text-base font-semibold">{u.ref}</h3>
     <div className="flex flex-wrap gap-2"><Badge tone={u.verified === "yes" ? "green" : "amber"}>{u.verified === "yes" ? t.libVerified : t.libUnverified}</Badge>
       <Badge tone={u.text_kind === "verbatim" ? "gray" : "amber"}>{u.text_kind === "verbatim" ? t.libVerbatim : t.libSummary}</Badge></div>
-    <p className="whitespace-pre-wrap leading-relaxed">{u.text || "…"}</p>
+    {(u.text || !u.children.length) && <p className="whitespace-pre-wrap leading-relaxed">{u.text || "…"}</p>}
     {u.children.length > 0 && <div><div className="mb-1 text-xs font-medium text-muted-foreground">{t.libParts}</div><div className="flex flex-wrap gap-2">{u.children.map((c) => link(c.uid, c.ref))}</div></div>}
     {u.related.length > 0 && <div><div className="mb-1 text-xs font-medium text-muted-foreground">{t.libEquiv}</div>
-      <ul className="space-y-1">{u.related.map((r) => <li key={r.uid}>{link(r.uid, `${r.source} · ${r.ref}`)} <span className="text-xs text-muted-foreground">({t.libRel[r.relation] ?? r.relation})</span></li>)}</ul></div>}
+      <ul className="space-y-1">{u.related.filter((r, i, a) => a.findIndex((x) => x.uid === r.uid) === i).map((r) => <li key={r.uid}>{link(r.uid, hitLabel(r))} <span className="text-xs text-muted-foreground">({t.libRel[r.relation] ?? r.relation})</span></li>)}</ul></div>}
     {u.url && <a className="text-xs underline" href={u.url} target="_blank" rel="noopener noreferrer">{t.libOpenSource} ↗</a>}
   </div>;
 }
