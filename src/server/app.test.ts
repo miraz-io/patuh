@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { openDb } from "./db.js";
 import { createUser, type Role } from "./auth.js";
+import { aiConfig } from "./ai.js";
 
 const PW = "correct horse battery";
 type App = ReturnType<typeof createApp>;
@@ -237,5 +238,51 @@ describe("workflow and validation", () => {
     const path = join(mkdtempSync(join(tmpdir(), "patuh-perm-")), "sub", "p.db");
     openDb(path);
     expect(statSync(path).mode & 0o077).toBe(0);
+  });
+});
+
+describe("security hardening", () => {
+  const from = (app: App, ip: string, email: string, password: string) =>
+    app.request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "patuh" }, body: JSON.stringify({ email, password }) },
+      { incoming: { socket: { remoteAddress: ip } } });
+  it("an attacker's failures lock email+IP, not the admin on another IP", async () => {
+    const { app } = await setup();
+    for (let i = 0; i < 5; i++) await from(app, "203.0.113.7", "admin@x.id", "wrong wrong wrong");
+    expect((await from(app, "203.0.113.7", "admin@x.id", PW)).status).toBe(429);
+    expect((await from(app, "198.51.100.2", "admin@x.id", PW)).status).toBe(200);
+  });
+  it("one IP guessing many emails is throttled", async () => {
+    const { app } = await setup();
+    for (let i = 0; i < 30; i++) await from(app, "203.0.113.9", `u${i}@x.id`, "wrong wrong wrong");
+    expect((await from(app, "203.0.113.9", "fresh@x.id", "wrong wrong wrong")).status).toBe(429);
+  });
+  it("logs exports and searches in the audit trail without the search text", async () => {
+    const { app, db, hr } = await setup();
+    const { cookie } = await login(app, "admin@x.id");
+    const id = (await json(await call(app, "/api/activities", { cookie, body: { name: "P", department_id: hr } }))).id;
+    await call(app, `/api/activities/${id}/dpia.docx?lang=id`, { cookie });
+    await call(app, "/api/search?q=secret-term-xyz", { cookie });
+    await call(app, "/api/dashboard", { cookie });
+    const rows = db.prepare("SELECT method,path FROM audit_log WHERE method='GET'").all() as { method: string; path: string }[];
+    expect(rows.map((r) => r.path)).toEqual([`/api/activities/${id}/dpia.docx`, "/api/search"]);
+  });
+  it("refuses link-local and metadata addresses as AI endpoint", async () => {
+    const { app } = await setup();
+    const { cookie } = await login(app, "admin@x.id");
+    for (const u of ["http://169.254.169.254/v1", "http://[fe80::1]/v1", "http://metadata.google.internal/v1"])
+      expect((await call(app, "/api/settings/ai", { method: "PUT", cookie, body: { base_url: u, model: "m" } })).status).toBe(400);
+    expect((await call(app, "/api/settings/ai", { method: "PUT", cookie, body: { base_url: "http://localhost:11434/v1", model: "m" } })).status).toBe(200);
+  });
+  it("stores the AI key encrypted, never shows it, and encrypts old plaintext on read", async () => {
+    const { app, db } = await setup();
+    const { cookie } = await login(app, "admin@x.id");
+    await call(app, "/api/settings/ai", { method: "PUT", cookie, body: { base_url: "http://localhost:1/v1", model: "m", api_key: "sk-test-123" } });
+    const raw = () => (db.prepare("SELECT value FROM settings WHERE key='ai_api_key'").get() as { value: string }).value;
+    expect(raw()).toMatch(/^enc1:/); expect(raw()).not.toContain("sk-test");
+    expect(aiConfig(db)?.apiKey).toBe("sk-test-123");
+    db.prepare("UPDATE settings SET value='sk-old-plain' WHERE key='ai_api_key'").run();
+    expect(aiConfig(db)?.apiKey).toBe("sk-old-plain");
+    expect(raw()).toMatch(/^enc1:/);
+    expect((await json(await call(app, "/api/settings", { cookie }))).ai.hasKey).toBe(true);
   });
 });

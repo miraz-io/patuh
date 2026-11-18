@@ -62,6 +62,7 @@ export function ChatBubble({ actId, lang, t, criteria, changed }: { actId: numbe
         {busy && <p className="text-muted-foreground">{t.thinking}</p>}
         <div ref={end} />
       </div>
+      <p className="border-t bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700">{t.aiNotice}</p>
       <form className="flex gap-2 border-t p-3" onSubmit={(e) => { e.preventDefault(); send(); }}>
         <input className={`${inputCls} min-w-0 flex-1`} placeholder={t.chatPlaceholder} maxLength={4000} value={msg} onChange={(e) => setMsg(e.target.value)} autoFocus />
         <Btn disabled={busy || !msg.trim()}>{t.send}</Btn>

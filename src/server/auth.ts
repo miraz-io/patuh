@@ -50,18 +50,23 @@ export function userForSession(db: DatabaseSync, token: string | undefined): Use
 export const endSession = (db: DatabaseSync, token: string) => void db.prepare("DELETE FROM sessions WHERE token_hash=?").run(sha(token));
 
 // ---- login throttling ----
-// ponytail: in-memory, per email, resets on restart. Behind several servers use a shared store.
-const fails = new Map<string, { n: number; until: number }>();
-export const MAX_FAILS = 5, LOCK_MS = 15 * 60_000;
+// ponytail: in-memory, resets on restart, one server. Behind several servers use a shared store.
+// Keys are "email|ip" (MAX_FAILS) and "ip|x" (IP_MAX_FAILS). Failures older than LOCK_MS stop counting.
+const fails = new Map<string, { n: number; until: number; since: number }>();
+export const MAX_FAILS = 5, IP_MAX_FAILS = 30, LOCK_MS = 15 * 60_000;
 export const isLocked = (key: string) => (fails.get(key)?.until ?? 0) > Date.now();
-export function recordFail(key: string) {
-  if (fails.size > 10_000) for (const [k, v] of fails) if (v.until < Date.now() && v.n === 0) fails.delete(k); // bound memory
+export function recordFail(key: string, max = MAX_FAILS) {
+  const now = Date.now();
+  if (fails.size > 10_000) for (const [k, v] of fails) if (v.until < now && now - v.since > LOCK_MS) fails.delete(k); // bound memory
   if (fails.size > 100_000) fails.clear();
-  const f = fails.get(key) ?? { n: 0, until: 0 };
-  f.n += 1; if (f.n >= MAX_FAILS) { f.until = Date.now() + LOCK_MS; f.n = 0; }
+  const f = fails.get(key) ?? { n: 0, until: 0, since: now };
+  if (now - f.since > LOCK_MS && f.until < now) { f.n = 0; f.since = now; }
+  f.n += 1; if (f.n >= max) { f.until = now + LOCK_MS; f.n = 0; f.since = now; }
   fails.set(key, f);
 }
 export const clearFails = (key: string) => void fails.delete(key);
+export const refundFail = (key: string) => { const f = fails.get(key); if (f && f.n > 0) f.n -= 1; }; // a successful sign-in does not count against the IP
+export const resetThrottle = () => fails.clear(); // for tests
 
 // ---- permissions ----
 // admin and dpo: everything. member: only their own department. auditor: read everything, change nothing.

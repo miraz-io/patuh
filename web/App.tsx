@@ -154,6 +154,7 @@ function List({ acts, dash, depts, me, t, lang, tourAct, reload, go, openSetting
       <div className="flex flex-wrap items-center gap-3">
         <Btn disabled={busy || !me.ai || !name.trim() || !desc.trim() || !procDept} onClick={() => create(true)}>{busy ? t.creating : t.createAi}</Btn>
         <Btn variant="outline" disabled={busy || !name.trim() || !procDept} onClick={() => create(false)}>{t.createEmpty}</Btn>
+        {me.ai && <span className="text-xs text-amber-700">{t.aiNotice}</span>}
         {!me.ai && <span className="text-sm text-muted-foreground">{t.aiMissing} {me.user.role === "admin" ? <button className="underline" onClick={openSettings}>{t.aiMissingAdmin}</button> : t.aiMissingOther}</span>}</div>
     </Card>}
     <div data-tour="process-list" className="space-y-2">{acts.map((a) => <Card key={a.id} data-tour={a.id === tourAct ? "proc-first" : undefined} onClick={() => go(a.id)} className="flex cursor-pointer items-center justify-between py-3 hover:bg-muted">
