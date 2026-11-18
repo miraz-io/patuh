@@ -5,6 +5,9 @@ import { Badge, Btn, Card, inputCls } from "./ui.js";
 
 export type Unit = { uid: string; source: string; sourceTitle: string; url: string; verified: string; verified_on: string; text_kind: string; ref: string; text: string;
   breadcrumb: { uid: string; ref: string }[]; children: { uid: string; ref: string }[]; related: { uid: string; ref: string; source: string; relation: string; note: string }[] };
+const SRC: Record<string, string> = { "uupdp-2022": "UU PDP 27/2022", "gdpr-2016-679": "GDPR", "eu-ai-act-2024-1689": "EU AI Act", "nist-ai-rmf-1.0": "NIST AI RMF" };
+/** Source first, so "Pasal 34" (UU PDP) and "A.5.34" (ISO 27001) never read as the same thing. */
+const hitLabel = (h: { uid: string; ref: string }) => { const [code = "", ...rest] = h.uid.split("/"); return code === "iso-ids" ? `ISO ${rest.join(" ")}` : `${SRC[code] ?? code} · ${h.ref}`; };
 type Hit = { uid: string; sourceTitle: string; ref: string; snippet: string; text_kind: string; verified: string };
 type PHit = { kind: "process" | "risk" | "control"; activity_id: number; title: string; department: string; snippet: string };
 
@@ -49,7 +52,7 @@ export function LibraryPage({ t, lang, openProcess }: { t: T; lang: string; open
       <div className="space-y-2">
         {!res.library.length && !res.processes.length && <p className="text-muted-foreground">{t.libNoResults}</p>}
         {res.library.map((h) => <Card key={h.uid} onClick={() => setUid(h.uid)} className={`cursor-pointer py-3 hover:bg-muted ${uid === h.uid ? "ring-2 ring-ring" : ""}`}>
-          <div className="text-xs text-muted-foreground">{h.sourceTitle}</div><div className="font-medium">{h.ref}</div>
+          <div className="text-xs text-muted-foreground">{h.sourceTitle}</div><div className="font-medium">{hitLabel(h)}</div>
           <p className="mt-1 text-sm text-muted-foreground">{h.snippet.replace(/[\[\]]/g, "")}</p></Card>)}
         {res.processes.map((p, i) => <Card key={i} onClick={() => openProcess(p.activity_id)} className="cursor-pointer py-3 hover:bg-muted">
           <div className="flex items-center gap-2"><Badge tone="gray">{t.libKinds[p.kind]}</Badge><span className="font-medium">{p.title}</span></div>
