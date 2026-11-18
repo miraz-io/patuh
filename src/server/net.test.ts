@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { addrProblem, embeddedV4, ipGroup, pinnedFetch } from "./net.js";
 import { aiUrlProblem } from "./ai.js";
-import { accountDelay, clearAccount, recordAccountFail } from "./auth.js";
+import { accountAttempt, clearAccount } from "./auth.js";
 import { aiConfig } from "./ai.js";
 import { getApiKey } from "./secret.js";
 import { openDb } from "./db.js";
@@ -38,16 +38,35 @@ describe("outbound address guard", () => {
   });
 });
 
-describe("per-account slowdown", () => {
-  it("slows after 10 failures from anywhere, up to 2 s, and never locks", () => {
-    const k = "slow@x.id"; clearAccount(k);
-    for (let i = 0; i < 10; i++) recordAccountFail(k);
-    expect(accountDelay(k)).toBe(0);
-    for (let i = 0; i < 3; i++) recordAccountFail(k);
-    expect(accountDelay(k)).toBe(600);
-    for (let i = 0; i < 100; i++) recordAccountFail(k);
-    expect(accountDelay(k)).toBe(2000);
-    clearAccount(k); expect(accountDelay(k)).toBe(0);
+describe("per-account rate limit", () => {
+  afterEach(() => vi.useRealTimers());
+  it("is free for 10 attempts, then one attempt per growing pause; parallel requests cannot slip through", () => {
+    vi.useFakeTimers(); const k = "rate@x.id"; clearAccount(k);
+    for (let i = 0; i < 10; i++) expect(accountAttempt(k)).toBe(0);
+    expect(accountAttempt(k)).toBe(0); // 11th goes through and sets a 200 ms pause
+    for (let i = 0; i < 20; i++) expect(accountAttempt(k)).toBeGreaterThan(0); // a burst of parallel tries is refused
+    vi.advanceTimersByTime(200); expect(accountAttempt(k)).toBe(0);
+    for (let i = 0; i < 30; i++) { vi.advanceTimersByTime(5000); expect(accountAttempt(k)).toBe(0); }
+    expect(accountAttempt(k)).toBeLessThanOrEqual(2000); // never longer than 2 s: not a lock
+    vi.advanceTimersByTime(2000); expect(accountAttempt(k)).toBe(0);
+    clearAccount(k); expect(accountAttempt(k)).toBe(0);
+  });
+  it("flooding with fake emails evicts old entries one by one but does not reset a busy account", () => {
+    vi.useFakeTimers(); const k = "victim@x.id"; clearAccount(k);
+    for (let i = 0; i < 12; i++) accountAttempt(k); // 12th sets a pause
+    for (let i = 0; i < 10_100; i++) { accountAttempt(`fake${i}@x.id`); if (i % 500 === 0) accountAttempt(k); } // victim stays recent
+    expect(accountAttempt(k)).toBeGreaterThan(0);
+  });
+  it("over HTTP: after many wrong guesses from different addresses even the right password waits briefly, then works", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const db = openDb(":memory:"); await createUser(db, { email: "own@x.id", name: "O", role: "admin", password: "correct horse battery" });
+    const app = createApp(db);
+    const at = (ip: string, password: string) => app.request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "patuh" }, body: JSON.stringify({ email: "own@x.id", password }) }, { incoming: { socket: { remoteAddress: ip } } });
+    for (let i = 0; i < 11; i++) await at(`198.51.100.${i}`, "wrong wrong wrong");
+    const early = await at("198.51.100.99", "correct horse battery");
+    expect(early.status).toBe(429); expect(early.headers.get("retry-after")).toBe("1");
+    vi.setSystemTime(Date.now() + 3000);
+    expect((await at("198.51.100.99", "correct horse battery")).status).toBe(200);
   });
 });
 

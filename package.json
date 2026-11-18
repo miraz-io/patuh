@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Open-source AI and data-protection compliance workspace for Indonesia (UU PDP), aligned with GDPR. DPIA, risk register, controls.",
   "license": "Apache-2.0",
-  "author": "Rino Miraz",
+  "author": "Miraz AI",
   "private": false,
   "type": "module",
   "engines": {

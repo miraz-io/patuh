@@ -66,16 +66,25 @@ export function recordFail(key: string, max = MAX_FAILS) {
 }
 export const clearFails = (key: string) => void fails.delete(key);
 export const refundFail = (key: string) => { const f = fails.get(key); if (f && f.n > 0) f.n -= 1; }; // a successful sign-in does not count against the IP
-// Per account, from any address: slows guessing (up to 2 s per try) but never locks, so nobody can deny the owner their own account.
-const accts = new Map<string, { n: number; since: number }>();
-export const ACCT_FREE = 10, ACCT_STEP_MS = 200, ACCT_MAX_MS = 2000;
-export function recordAccountFail(key: string) {
-  const now = Date.now(); if (accts.size > 10_000) accts.clear();
-  const a = accts.get(key);
-  accts.set(key, a && now - a.since < LOCK_MS ? { n: a.n + 1, since: a.since } : { n: 1, since: now });
+// Per account, from any address: a rate limit, never a lock. After ACCT_FREE attempts each further attempt must wait
+// min(2 s, 200 ms per extra attempt) after the previous one, so guessing is slow and the owner is slowed for seconds, not locked out.
+// Attempts are counted BEFORE the password check, so parallel requests cannot slip past: the first sets the next allowed time, the rest are refused.
+// The map is a bounded LRU: expired and least-recently-used entries go first, it is never cleared wholesale.
+const accts = new Map<string, { n: number; since: number; next: number }>();
+export const ACCT_FREE = 10, ACCT_STEP_MS = 200, ACCT_MAX_MS = 2000, ACCT_CAP = 10_000;
+/** 0 = go ahead (and the attempt is counted); otherwise milliseconds to wait (answer 429 with Retry-After). */
+export function accountAttempt(key: string): number {
+  const now = Date.now(), old = accts.get(key);
+  accts.delete(key); // re-insert below: Map order = recency
+  const e = old && now - old.since < LOCK_MS ? old : { n: 0, since: now, next: 0 };
+  if (now < e.next) { accts.set(key, e); return e.next - now; }
+  e.n += 1; e.next = now + Math.min(ACCT_MAX_MS, Math.max(0, e.n - ACCT_FREE) * ACCT_STEP_MS);
+  accts.set(key, e);
+  for (const [k, v] of accts) { if (accts.size <= ACCT_CAP) break; if (now - v.since >= LOCK_MS) accts.delete(k); }
+  for (const k of accts.keys()) { if (accts.size <= ACCT_CAP) break; accts.delete(k); } // still full: drop least recently used
+  return 0;
 }
-export const accountDelay = (key: string) => { const a = accts.get(key); return a && Date.now() - a.since < LOCK_MS ? Math.min(ACCT_MAX_MS, Math.max(0, a.n - ACCT_FREE) * ACCT_STEP_MS) : 0; };
-export const clearAccount = (key: string) => void accts.delete(key);
+export const clearAccount = (key: string) => void accts.delete(key); // a correct password is the owner: forget the failures
 export const resetThrottle = () => fails.clear(); // for tests
 
 // ---- permissions ----

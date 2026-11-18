@@ -2,3 +2,9 @@ node_modules
 data
 dist
 .env
+.DS_Store
+*.log
+*.key
+.env*
+data/
+coverage/

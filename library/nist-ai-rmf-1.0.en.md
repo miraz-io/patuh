@@ -77,11 +77,11 @@ Policies and procedures are in place to define and differentiate roles and respo
 
 ## GOVERN 4 {#GOVERN-4}
 
-Organizational teams are committed development, deployment, and uses of AI systems to minimize to a culture that considers and communicates AI risk.
+Organizational teams are committed to a culture that considers and communicates AI risk.
 
 ### GOVERN 4.1 {#GOVERN-4.1}
 
-Organizational policies and practices are in place to foster a critical thinking and safety-first mindset in the design, potential negative impacts.
+Organizational policies and practices are in place to foster a critical thinking and safety-first mindset in the design, development, deployment, and uses of AI systems to minimize potential negative impacts.
 
 ### GOVERN 4.2 {#GOVERN-4.2}
 

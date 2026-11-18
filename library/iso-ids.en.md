@@ -12,7 +12,7 @@ text_kind: summary
 url: https://www.iso.org/standard/27001
 verified: no
 verified_on: 2026-11-03
-note: Clause and control IDs with one-line own-words topic labels only; no standard text is reproduced. IDs written from knowledge, not checked against a public source. 27701 follows the 2019 edition (the 2025 edition is restructured, numbering may differ).
+note: Clause and control IDs with one-line own-words topic labels only; no standard text is reproduced. IDs written from knowledge, not checked against the standards (they are paid documents); labels are our own wording. 27701 follows the 2019 edition (the 2025 edition is restructured, numbering may differ).
 ---
 
 ## ISO/IEC 27001:2022 (ISMS requirements and Annex A themes) {#27001}
@@ -67,87 +67,87 @@ Theme: technological controls (endpoints, access, crypto, logging, secure develo
 
 ### 27001 A.5.1 {#27001/A.5.1}
 
-Information security policies.
+Written security policies approved by management.
 
 ### 27001 A.5.9 {#27001/A.5.9}
 
-Inventory of information and associated assets.
+Keep a list of information and the assets that hold it.
 
 ### 27001 A.5.12 {#27001/A.5.12}
 
-Classification of information.
+Sort information by how sensitive it is.
 
 ### 27001 A.5.15 {#27001/A.5.15}
 
-Access control rules.
+Rules for who may access what.
 
 ### 27001 A.5.19 {#27001/A.5.19}
 
-Information security in supplier relationships.
+Security expectations when working with suppliers.
 
 ### 27001 A.5.20 {#27001/A.5.20}
 
-Security terms in supplier agreements.
+Security clauses to put into supplier contracts.
 
 ### 27001 A.5.23 {#27001/A.5.23}
 
-Information security for use of cloud services.
+Security rules for buying and using cloud services.
 
 ### 27001 A.5.24 {#27001/A.5.24}
 
-Planning and preparing for incident management.
+Prepare roles and steps for handling security incidents.
 
 ### 27001 A.5.26 {#27001/A.5.26}
 
-Responding to information security incidents.
+Act on a security incident once it is reported.
 
 ### 27001 A.5.31 {#27001/A.5.31}
 
-Identifying legal, statutory, regulatory and contractual requirements.
+Know which laws and contracts apply to your information.
 
 ### 27001 A.5.34 {#27001/A.5.34}
 
-Privacy and protection of personally identifiable information.
+Protect personal data as the law requires.
 
 ### 27001 A.6.3 {#27001/A.6.3}
 
-Information security awareness, education and training.
+Train staff on information security.
 
 ### 27001 A.8.5 {#27001/A.8.5}
 
-Secure authentication.
+Prove who a user is before granting access.
 
 ### 27001 A.8.8 {#27001/A.8.8}
 
-Management of technical vulnerabilities.
+Find and fix weaknesses in systems.
 
 ### 27001 A.8.10 {#27001/A.8.10}
 
-Deletion of information no longer needed.
+Delete information you no longer need.
 
 ### 27001 A.8.11 {#27001/A.8.11}
 
-Data masking.
+Hide parts of sensitive data where full values are not needed.
 
 ### 27001 A.8.12 {#27001/A.8.12}
 
-Data leakage prevention.
+Stop sensitive data from leaving by accident or on purpose.
 
 ### 27001 A.8.13 {#27001/A.8.13}
 
-Information backup.
+Keep tested copies of important data.
 
 ### 27001 A.8.15 {#27001/A.8.15}
 
-Logging.
+Record and keep activity logs.
 
 ### 27001 A.8.24 {#27001/A.8.24}
 
-Use of cryptography.
+Use encryption with managed keys.
 
 ### 27001 A.8.28 {#27001/A.8.28}
 
-Secure coding.
+Write software with security in mind.
 
 ## ISO/IEC 27701:2019 (privacy information management, extension to 27001/27002) {#27701}
 

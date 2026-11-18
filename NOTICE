@@ -1,0 +1,15 @@
+Patuh
+Copyright 2026 Miraz AI (miraz.id)
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The regulation library (library/) contains texts of third parties, used with attribution:
+- Undang-Undang Nomor 27 Tahun 2022 tentang Pelindungan Data Pribadi (Republic of Indonesia), selected articles.
+  Official text: https://peraturan.bpk.go.id/Details/229798/uu-no-27-tahun-2022
+- Regulation (EU) 2016/679 (GDPR) and Regulation (EU) 2024/1689 (AI Act), (c) European Union, reused under the
+  Commission Decision 2011/833/EU on reuse of documents. Official text: https://eur-lex.europa.eu
+- NIST AI Risk Management Framework 1.0 (NIST AI 100-1), a work of the US government. https://www.nist.gov/itl/ai-risk-management-framework
+- ISO/IEC 27001, 27701 and 42001: only clause identifiers and our own short labels. ISO and IEC own the standards;
+  buy them at https://www.iso.org. Nothing from the standards' text is reproduced.
+
+Runtime dependencies (hono, @hono/node-server, docx, react, react-dom and their dependencies) are MIT licensed.

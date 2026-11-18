@@ -127,15 +127,31 @@ and SSO never creates users. ID tokens are verified in Patuh (signature, issuer,
 
 ## Status and honesty
 
-Early version. This is a tool for your compliance team, **not legal advice**. PP 33/2026 (the UU PDP implementing
-regulation, effective 16 January 2027) and the national AI regulation (not yet signed) may change what a DPIA must contain:
-check the official text. The rules live in `src/core/screening.ts` so they are easy to update. Pull requests welcome.
+Early version (0.1.0), built by [Miraz AI](https://miraz.id). Patuh is a tool for your compliance team and **not legal advice**:
+it does not replace a lawyer or your data protection officer, and the rules in `src/core/screening.ts` are our reading of the law.
+
+- **PP 33/2026** (the UU PDP implementing regulation) was reported as issued in July 2026 and as effective 16 January 2027,
+  but this is based on news reports, not the official text, which we could not obtain. It is **not included** and will be added
+  after the official text is available. It, and the national AI regulation (not yet signed), may change what a DPIA must contain: check the official texts.
+- **Library status:** a sample of the texts was compared with the official sources, see `library/VERIFIED.md` for what was and was not checked.
+  The regulation texts are public documents reproduced with attribution (see `NOTICE`); ISO standards appear only as identifiers with our own labels.
+- Pull requests welcome, see `CONTRIBUTING.md`. Report security problems as described in `SECURITY.md`.
 
 Security notes: sessions are random tokens in HttpOnly, SameSite cookies (only a hash is stored); every change needs a
 CSRF header; each record is checked against the signed-in user's department; every change is written to an audit log, as are DPIA exports, library searches and AI chats (who, when, what; never the text);
 login attempts are throttled per email and IP address together (5 wrong passwords lock that pair for 15 minutes, so an outsider cannot lock your admin out from another address) and per IP (30 failures; IPv6 clients are grouped by /64). On top of that an account gets a growing delay (up to 2 s per try) after 10 failures from any address, which slows distributed guessing without ever locking the owner out. Behind a proxy set `PATUH_TRUST_PROXY=1`. Throttling is in memory, so run a single server, or add a
 shared store if you scale out. Editing a signed-off process without sign-off rights withdraws the signature. The database
 file is created readable by its owner only.
+
+## Docker
+
+```bash
+docker build -t patuh .
+docker run -d -p 127.0.0.1:8080:8080 -v patuh-data:/data patuh
+docker exec -it <container> npm run admin -- init        # first admin; the database and key file live in the volume
+```
+
+Publish the port to localhost only, or put an HTTPS proxy in front (see Security notes).
 
 ## Develop
 
@@ -149,4 +165,4 @@ Stack: TypeScript, Hono, Node's built-in SQLite, React, Tailwind (shadcn/ui look
 
 ## Licence
 
-Apache-2.0. Maintained by Rino Miraz.
+Apache-2.0, see `LICENSE` and `NOTICE`. Maintained by Miraz AI.
