@@ -42,6 +42,11 @@ const en = {
   chatNeed: "To continue I need:", chatHelpful: "Helpful", chatNot: "Not helpful", chatBefore: "Now", chatAfter: "Proposed", chatWhy: "Why", chatKindsP: { field: "Change field", screening: "Change DPIA criteria", risk: "Add risk", control: "Add control", residual: "Change residual risk" } as Record<string, string>,
   metrics: { title: "AI quality", days: "last 30 days", grounding: "Answers with a checked source", unsupported: "Statements dropped as unsupported", decline: "Declined (no source)", clarify: "Asked a question back", error: "Errors",
     accept: "Proposals accepted", override: "Proposals edited or rejected", confirmed: "AI drafts confirmed by people", p50: "Median time (s)", p95: "Slowest 5% (s)", tokens: "Tokens used", library: "Library", none: "No AI use yet.", declinedQ: "Questions the library could not answer (add content for these)", target: "target" },
+  err: { generic: "Something went wrong", notReady: "Not ready to sign off: {n} item(s) are still empty or unconfirmed AI drafts. See the checklist at the top of this process.",
+    scale: "Likelihood and severity must be a number from 1 to 4.", forbidden: "You do not have permission to do that.", notFound: "That item was not found. It may have been removed or you may not have access.",
+    aiOff: "AI is not set up yet. An admin can do that under Settings.", busy: "The server is busy or you tried too often. Wait a moment and try again.", aiFail: "The AI service could not be reached or refused the request. Check Settings.",
+    large: "That text is too long.", url: "Enter a full address starting with http:// or https://, and a model name. Internal link-local addresses are not allowed." },
+  screenResult: { title: "DPIA required?", yes: "Yes", no: "No", uuPdp: "At least one UU PDP Article 34(2) category applies.", gdpr: "Two or more GDPR/EDPB criteria apply.", none: "No mandatory criteria apply. A voluntary assessment is still possible." },
   charts: {
     view: { chart: "Chart", table: "Table" },
     journey: "DPIA journey", journeySub: "How many processes reach each stage. Each stage is a subset of the one before.",
@@ -96,6 +101,11 @@ const id: typeof en = {
   chatNeed: "Untuk melanjutkan saya perlu:", chatHelpful: "Membantu", chatNot: "Tidak membantu", chatBefore: "Sekarang", chatAfter: "Usulan", chatWhy: "Alasan", chatKindsP: { field: "Ubah isian", screening: "Ubah kriteria DPIA", risk: "Tambah risiko", control: "Tambah kontrol", residual: "Ubah risiko residual" } as Record<string, string>,
   metrics: { title: "Kualitas AI", days: "30 hari terakhir", grounding: "Jawaban dengan sumber terperiksa", unsupported: "Pernyataan dibuang karena tanpa dukungan", decline: "Ditolak (tanpa sumber)", clarify: "Bertanya balik", error: "Galat",
     accept: "Usulan diterima", override: "Usulan diubah atau ditolak", confirmed: "Draf AI yang dikonfirmasi orang", p50: "Waktu median (dtk)", p95: "5% terlambat (dtk)", tokens: "Token terpakai", library: "Pustaka", none: "Belum ada pemakaian AI.", declinedQ: "Pertanyaan yang tak terjawab pustaka (tambahkan isinya)", target: "target" },
+  err: { generic: "Terjadi masalah", notReady: "Belum siap disahkan: {n} butir masih kosong atau draf AI yang belum dikonfirmasi. Lihat daftar di bagian atas proses ini.",
+    scale: "Kemungkinan dan dampak harus berupa angka 1 sampai 4.", forbidden: "Anda tidak memiliki izin untuk melakukan itu.", notFound: "Data tidak ditemukan. Mungkin sudah dihapus atau Anda tidak memiliki akses.",
+    aiOff: "AI belum diatur. Admin dapat mengaturnya di Pengaturan.", busy: "Server sedang sibuk atau terlalu sering dicoba. Tunggu sebentar lalu coba lagi.", aiFail: "Layanan AI tidak dapat dihubungi atau menolak permintaan. Periksa Pengaturan.",
+    large: "Teks terlalu panjang.", url: "Isi alamat lengkap yang diawali http:// atau https://, dan nama model. Alamat internal link-local tidak diizinkan." },
+  screenResult: { title: "DPIA wajib?", yes: "Ya", no: "Tidak", uuPdp: "Sedikitnya satu kategori UU PDP Pasal 34 ayat (2) berlaku.", gdpr: "Dua kriteria GDPR/EDPB atau lebih berlaku.", none: "Tidak ada kriteria wajib. Penilaian sukarela tetap dapat dilakukan." },
   charts: {
     view: { chart: "Grafik", table: "Tabel" },
     journey: "Perjalanan DPIA", journeySub: "Berapa proses yang mencapai tiap tahap. Setiap tahap adalah bagian dari tahap sebelumnya.",
@@ -111,3 +121,20 @@ const id: typeof en = {
 
 export const TXT = { en, id };
 export type T = typeof en;
+
+const RULES: [RegExp, (t: T, m: RegExpMatchArray) => string][] = [
+  [/^Not ready to sign off: (\d+)/, (t, m) => t.err.notReady.replace("{n}", m[1])],
+  [/must be 1-4/, (t) => t.err.scale],
+  [/read-only|cannot add|Only an admin|Missing x-requested/, (t) => t.err.forbidden],
+  [/not found/i, (t) => t.err.notFound],
+  [/AI is not set up/, (t) => t.err.aiOff],
+  [/busy|Too many/i, (t) => t.err.busy],
+  [/AI provider|AI request|AI answer/, (t) => t.err.aiFail],
+  [/too large/i, (t) => t.err.large],
+  [/full address|not allowed/i, (t) => t.err.url],
+];
+/** Server messages are short English strings: show a translated, human sentence instead. Unknown ones fall back to a generic line plus the raw text. */
+export function humanError(raw: string, t: T): string {
+  for (const [re, f] of RULES) { const m = raw.match(re); if (m) return f(t, m); }
+  return `${t.err.generic}: ${raw}`;
+}

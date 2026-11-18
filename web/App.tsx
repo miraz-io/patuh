@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, canSignOff, canWriteDept, onError, onSignedOut, type Me } from "./api.js";
-import { TXT, type Lang, type T } from "./i18n.js";
+import { TXT, humanError, type Lang, type T } from "./i18n.js";
 import { ControlsChart, DepartmentChart, PipelineChart, RiskChart, type Overview } from "./Charts.js";
 import { ChatBubble } from "./Chat.js";
 import { Login } from "./Login.js";
@@ -31,6 +31,7 @@ export function App() {
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [tour, setTour] = useState<Tour | null>(null);
   const t = TXT[lang];
+  useEffect(() => setError(""), [page, open, me?.user.id]); // an error belongs to the screen where it happened
 
   const loadMe = useCallback(() => api<Me>("/api/auth/me").then(setMe).catch(() => setMe(null)), []);
   const load = useCallback(async () => {
@@ -74,19 +75,19 @@ export function App() {
         {me.demo && <div className="mt-auto"><Badge tone="amber">{t.demoBanner}</Badge></div>}
       </aside>
       <main className="min-w-0 flex-1">
-        <header className="flex flex-wrap items-center justify-between gap-2 border-b px-6 py-3">
-          <div className="flex gap-2 md:hidden">{items.map((p) => <Btn key={p} variant="outline" onClick={() => nav(p)}>{t[p]}</Btn>)}</div>
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 sm:px-6">
+          <div className="flex flex-wrap gap-2 md:hidden">{items.map((p) => <Btn key={p} variant="outline" onClick={() => nav(p)}>{t[p]}</Btn>)}</div>
           <div className="ml-auto flex items-center gap-3">
             <div data-tour="user" className="text-right text-sm leading-tight"><div className="font-medium">{me.user.name}</div><div className="text-xs text-muted-foreground">{t.roles[me.user.role]}</div></div>
             <div className="flex gap-1">{(["en", "id"] as const).map((l) => <Btn key={l} variant={lang === l ? "primary" : "outline"} onClick={() => setLang(l)}>{l.toUpperCase()}</Btn>)}</div>
             <Btn variant="outline" onClick={signOut}>{t.signOut}</Btn>
           </div>
         </header>
-        {error && <div role="alert" className="flex items-center justify-between bg-red-500/15 px-6 py-2 text-sm text-red-600">{error}<button onClick={() => setError("")} aria-label="Close">×</button></div>}
-        <div className="mx-auto max-w-5xl space-y-6 p-6">
+        {error && <div role="alert" className="fixed left-1/2 top-3 z-[90] flex w-[calc(100vw-2rem)] max-w-xl -translate-x-1/2 items-start justify-between gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg"><span>{humanError(error, t)}</span><button onClick={() => setError("")} aria-label="Close" className="text-lg leading-none">×</button></div>}
+        <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
           {page === "dashboard" && <Dashboard rows={dash} overview={overview} t={t} me={me} tourAct={tourAct} go={(id) => { setPage("processes"); setOpen(id); }} startWelcome={() => play(TOURS[0])} />}
           {page === "processes" && open === null && <List acts={acts} dash={dash} depts={depts} me={me} t={t} lang={lang} tourAct={tourAct} reload={load} go={(id, drafted) => { setFresh(drafted ? id : null); setOpen(id); }} openSettings={() => nav("settings")} />}
-          {page === "processes" && activity && <Detail key={open} act={activity} me={me} criteria={criteria} lang={lang} t={t} reload={load} fresh={fresh === open} back={() => setOpen(null)} />}
+          {page === "processes" && activity && <Detail key={open} act={activity} res={dash.find((d) => d.id === open)} me={me} criteria={criteria} lang={lang} t={t} reload={load} fresh={fresh === open} back={() => setOpen(null)} />}
           {page === "library" && <LibraryPage t={t} lang={lang} openProcess={(id) => { setPage("processes"); setOpen(id); }} />}
           {page === "settings" && me.user.role === "admin" && <Settings t={t} reloadMe={loadMe} />}
           {page === "tutorials" && <Tutorials me={me} lang={lang} t={t} play={play} />}
@@ -114,12 +115,12 @@ function Dashboard({ rows, overview, t, me, tourAct, go, startWelcome }: { rows:
     </div>}
     <Card data-tour="table" className="overflow-x-auto p-0">
       <table className="w-full text-sm">
-        <thead><tr className="border-b text-left text-muted-foreground">{[t.name, t.dept, t.dpia, t.risks, t.openCtl, t.status].map((h) => <th key={h} className="px-4 py-3 font-medium">{h}</th>)}</tr></thead>
+        <thead><tr className="border-b text-left text-muted-foreground">{[t.name, t.dept, t.dpia, t.risks, t.openCtl, t.status].map((h, i) => <th key={h} className={`px-3 py-3 font-medium sm:px-4 ${i === 1 || i === 3 ? "hidden sm:table-cell" : ""}`}>{h}</th>)}</tr></thead>
         <tbody>{rows.map((r) => <tr key={r.id} data-tour={r.id === tourAct ? "row-first" : undefined} onClick={() => go(r.id)} className="cursor-pointer border-b last:border-0 hover:bg-muted">
-          <td className="px-4 py-3 font-medium">{r.name}</td><td className="px-4 py-3">{r.department}</td>
-          <td className="px-4 py-3"><Badge tone={r.dpiaRequired ? "amber" : "gray"}>{r.dpiaRequired ? t.yes : t.no}</Badge></td>
-          <td className="px-4 py-3">{r.risks}</td><td className="px-4 py-3">{r.openControls}</td>
-          <td className="px-4 py-3">{r.consultation ? <Badge tone="red">{t.consultFlag}</Badge> : <Badge tone="green">OK</Badge>}</td></tr>)}
+          <td className="px-3 py-3 font-medium sm:px-4">{r.name}</td><td className="hidden px-4 py-3 sm:table-cell">{r.department}</td>
+          <td className="px-3 py-3 sm:px-4"><Badge tone={r.dpiaRequired ? "amber" : "gray"}>{r.dpiaRequired ? t.yes : t.no}</Badge></td>
+          <td className="hidden px-4 py-3 sm:table-cell">{r.risks}</td><td className="px-3 py-3 sm:px-4">{r.openControls}</td>
+          <td className="px-3 py-3 sm:px-4">{r.consultation ? <Badge tone="red">{t.consultFlag}</Badge> : <Badge tone="green">OK</Badge>}</td></tr>)}
           {!rows.length && <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">{t.none}</td></tr>}</tbody>
       </table>
     </Card>
@@ -164,7 +165,7 @@ function List({ acts, dash, depts, me, t, lang, tourAct, reload, go, openSetting
 
 type RiskData = { id: number; source?: string; confirmed?: number; title: string; likelihood: number; severity: number; residual_likelihood: number | null; residual_severity: number | null; controls: { id: number; title: string; owner: string; due: string; status: string }[] };
 
-function Detail({ act, me, criteria, lang, t, reload, back, fresh }: { act: Activity; me: Me; criteria: Criterion[]; lang: Lang; t: T; reload: () => void; back: () => void; fresh: boolean }) {
+function Detail({ act, res, me, criteria, lang, t, reload, back, fresh }: { act: Activity; res?: DashRow; me: Me; criteria: Criterion[]; lang: Lang; t: T; reload: () => void; back: () => void; fresh: boolean }) {
   const [risks, setRisks] = useState<RiskData[]>([]);
   const [form, setForm] = useState({ title: "", l: 2, s: 2 });
   const [comp, setComp] = useState<Comp | null>(null);
@@ -195,11 +196,12 @@ function Detail({ act, me, criteria, lang, t, reload, back, fresh }: { act: Acti
         {comp.gaps.length > 4 && <li className="text-xs text-muted-foreground">+{comp.gaps.length - 4}</li>}</ul>}</Card>}
     <fieldset disabled={ro} className="space-y-6">
       <Card data-tour="screening"><h2 className="mb-3 flex flex-wrap items-center gap-2 font-medium">{t.screening}{prov("screening")}{!ro && !ticked.size && comp?.items.find((i) => i.key === "screening")?.state === "empty" && <Btn type="button" variant="outline" onClick={() => confirm(["screening"])}>{t.comp.confirmAll}</Btn>}</h2>
+        {res && <p role="status" data-tour="screen-result" className={`mb-3 rounded-md p-3 text-sm ${res.dpiaRequired ? "bg-amber-500/15 text-amber-700" : "bg-muted"}`}><span className="font-semibold">{t.screenResult.title} {res.dpiaRequired ? t.screenResult.yes : t.screenResult.no}.</span> {res.basis === "uu-pdp" ? t.screenResult.uuPdp : res.basis === "gdpr-two-criteria" ? t.screenResult.gdpr : t.screenResult.none}</p>}
         {criteria.map((c) => <label key={c.id} className="flex items-start gap-3 py-1.5 text-sm">
           <input key={`${c.id}${ticked.has(c.id)}`} type="checkbox" className="mt-1" defaultChecked={ticked.has(c.id)} onChange={() => toggle(c.id)} />
           <span>{lang === "en" ? c.en : c.id_} <span className="text-xs text-muted-foreground">{c.uu ? `UU PDP 34(2)${c.uu} · ` : ""}{c.gdpr}</span></span></label>)}</Card>
       <Card data-tour="details" className="space-y-3"><h2 className="font-medium">{t.details}</h2>
-        {Object.entries(t.fields).map(([k, label]) => <label key={k} className="block text-sm"><span className="mb-1 flex items-center gap-2 text-muted-foreground">{label}{prov(k)}</span>
+        {Object.entries(t.fields).map(([k, label]) => <label key={k} data-tour={k === "dpo_advice" ? "dpo-advice" : undefined} className="block text-sm"><span className="mb-1 flex items-center gap-2 text-muted-foreground">{label}{prov(k)}</span>
           <textarea key={`${k}:${act[k] ?? ""}`} rows={k === "review_date" || k === "signed_by" ? 1 : 2} maxLength={5000} disabled={ro || ((k === "dpo_advice" || k === "signed_by") && !signoff)} className={`${inputCls} w-full disabled:opacity-60`}
             defaultValue={act[k] ?? ""} onBlur={(e) => e.target.value !== (act[k] ?? "") && save({ [k]: e.target.value }).catch(() => { e.target.value = act[k] ?? ""; })} /></label>)}
         <label className="flex items-center gap-2 text-sm"><input key={`cb${act.cross_border}`} type="checkbox" defaultChecked={!!act.cross_border} onChange={(e) => save({ cross_border: e.target.checked ? 1 : 0 })} />{t.crossBorder}</label></Card>
@@ -207,14 +209,15 @@ function Detail({ act, me, criteria, lang, t, reload, back, fresh }: { act: Acti
         {risks.map((r, n) => <RiskBlock key={r.id} r={r} first={n === 0} t={t} reload={() => { loadRisks().catch(() => {}); reload(); }} />)}
         <div className="flex flex-wrap items-end gap-2 border-t pt-4">
           <input className={`${inputCls} min-w-48 flex-1`} placeholder={t.riskTitle} maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          <label className="text-xs">{t.likelihood}<input type="number" min={1} max={4} className={`${inputCls} block w-20`} value={form.l} onChange={(e) => setForm({ ...form, l: Number(e.target.value) })} /></label>
-          <label className="text-xs">{t.severity}<input type="number" min={1} max={4} className={`${inputCls} block w-20`} value={form.s} onChange={(e) => setForm({ ...form, s: Number(e.target.value) })} /></label>
+          <label className="text-xs">{t.likelihood}<input type="number" min={1} max={4} className={`${inputCls} block w-20`} value={form.l} onChange={(e) => setForm({ ...form, l: clamp(e.target.value) })} /></label>
+          <label className="text-xs">{t.severity}<input type="number" min={1} max={4} className={`${inputCls} block w-20`} value={form.s} onChange={(e) => setForm({ ...form, s: clamp(e.target.value) })} /></label>
           <Btn disabled={!form.title.trim()} onClick={async () => { await api(`/api/activities/${act.id}/risks`, "POST", { title: form.title, likelihood: form.l, severity: form.s }); setForm({ ...form, title: "" }); loadRisks(); reload(); }}>{t.addRisk}</Btn></div></Card>
     </fieldset>
     {!ro && me.ai && <ChatBubble actId={act.id} lang={lang} t={t} criteria={criteria} changed={() => { loadRisks().catch(() => {}); reload(); }} />}
   </>;
 }
 
+const clamp = (v: string) => Math.min(4, Math.max(1, Math.round(Number(v)) || 1)); // the scale is 1-4: typing 9 or 0 snaps back
 const level = (l: number, s: number): ["red" | "amber" | "green", number] => { const n = l * s; return [n >= 8 ? "red" : n >= 4 ? "amber" : "green", n]; };
 
 function RiskBlock({ r, first, t, reload }: { r: RiskData; first: boolean; t: T; reload: () => void }) {
@@ -223,9 +226,9 @@ function RiskBlock({ r, first, t, reload }: { r: RiskData; first: boolean; t: T;
   const [rt, rn] = level(r.residual_likelihood ?? r.likelihood, r.residual_severity ?? r.severity);
   const setRes = async (k: "residual_likelihood" | "residual_severity", v: number) => { await api(`/api/risks/${r.id}`, "PATCH", { [k]: v }); reload(); };
   return <div data-tour={first ? "risk-first" : undefined} className="rounded-md border p-3">
-    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{r.title}</span>{r.confirmed === 0 && <><Badge tone="amber">{t.comp.draft}</Badge><button type="button" className="text-xs underline" onClick={async () => { await api(`/api/risks/${r.id}/confirm`, "POST"); reload(); }}>{t.comp.confirm}</button></>}<Badge tone={tone}>{n}</Badge>→<Badge tone={rt}>{rn}</Badge>
-      <label className="ml-auto text-xs">{t.resL}<input key={`rl${r.residual_likelihood}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_likelihood ?? ""} onBlur={(e) => e.target.value && setRes("residual_likelihood", Number(e.target.value))} /></label>
-      <label className="text-xs">{t.resS}<input key={`rs${r.residual_severity}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_severity ?? ""} onBlur={(e) => e.target.value && setRes("residual_severity", Number(e.target.value))} /></label></div>
+    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{r.title}</span>{r.confirmed === 0 && <><Badge tone="amber">{t.comp.draft}</Badge><button type="button" className="text-xs underline" onClick={async () => { await api(`/api/risks/${r.id}/confirm`, "POST"); reload(); }}>{t.comp.confirm}</button></>}<span data-tour={first ? "risk-badges" : undefined} className="inline-flex items-center gap-1"><Badge tone={tone}>{n}</Badge>→<Badge tone={rt}>{rn}</Badge></span>
+      <label className="ml-auto text-xs">{t.resL}<input key={`rl${r.residual_likelihood}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_likelihood ?? ""} onBlur={(e) => e.target.value && setRes("residual_likelihood", clamp(e.target.value))} /></label>
+      <label className="text-xs">{t.resS}<input key={`rs${r.residual_severity}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_severity ?? ""} onBlur={(e) => e.target.value && setRes("residual_severity", clamp(e.target.value))} /></label></div>
     <ul data-tour={first ? "controls-first" : undefined} className="my-2 space-y-1 text-sm">{r.controls.map((k) => <li key={k.id} className="flex flex-wrap items-center gap-2">
       <select className="rounded-md border bg-background px-1 text-xs" value={k.status} onChange={async (e) => { await api(`/api/controls/${k.id}`, "PATCH", { status: e.target.value }); reload(); }}>
         {["planned", "in-progress", "done"].map((s) => <option key={s}>{s}</option>)}</select>{k.title}
