@@ -66,26 +66,45 @@ export function recordFail(key: string, max = MAX_FAILS) {
 }
 export const clearFails = (key: string) => void fails.delete(key);
 export const refundFail = (key: string) => { const f = fails.get(key); if (f && f.n > 0) f.n -= 1; }; // a successful sign-in does not count against the IP
-// Per account, from any address: a rate limit, never a lock. After ACCT_FREE attempts each further attempt must wait
-// min(2 s, 200 ms per extra attempt) after the previous one, so guessing is slow and the owner is slowed for seconds, not locked out.
-// Attempts are counted BEFORE the password check, so parallel requests cannot slip past: the first sets the next allowed time, the rest are refused.
-// The map is a bounded LRU: expired and least-recently-used entries go first, it is never cleared wholesale.
+// Per account (existing accounts only), from any address. Final design, see SECURITY.md for the tradeoff:
+// - only FAILED verifications count; after ACCT_FREE failures every further try from an unknown address must wait
+//   min(30 s, 1 s per extra failure) after the previous failure (429 + Retry-After). It is a pause, never a lock.
+// - an email+IP pair that signed in successfully before is never held back by this counter, so an attacker hammering
+//   the account cannot lock the owner out of their usual address (the pair and IP limits above still apply to everyone).
+// - unknown emails get no entry here (fake emails cannot fill the map); only expired entries are evicted, and when the map is still
+//   full new accounts are simply not tracked (they fall back to the pair and IP limits).
 const accts = new Map<string, { n: number; since: number; next: number }>();
-export const ACCT_FREE = 10, ACCT_STEP_MS = 200, ACCT_MAX_MS = 2000, ACCT_CAP = 10_000;
-/** 0 = go ahead (and the attempt is counted); otherwise milliseconds to wait (answer 429 with Retry-After). */
-export function accountAttempt(key: string): number {
-  const now = Date.now(), old = accts.get(key);
-  accts.delete(key); // re-insert below: Map order = recency
-  const e = old && now - old.since < LOCK_MS ? old : { n: 0, since: now, next: 0 };
-  if (now < e.next) { accts.set(key, e); return e.next - now; }
-  e.n += 1; e.next = now + Math.min(ACCT_MAX_MS, Math.max(0, e.n - ACCT_FREE) * ACCT_STEP_MS);
-  accts.set(key, e);
-  for (const [k, v] of accts) { if (accts.size <= ACCT_CAP) break; if (now - v.since >= LOCK_MS) accts.delete(k); }
-  for (const k of accts.keys()) { if (accts.size <= ACCT_CAP) break; accts.delete(k); } // still full: drop least recently used
-  return 0;
+const goodPairs = new Map<string, number>(); // "email|ip" -> expires
+export const ACCT_FREE = 10, ACCT_STEP_MS = 1000, ACCT_MAX_MS = 30_000, PAIR_TTL_MS = 30 * 86_400_000;
+export const limits = { cap: 10_000 }; // adjustable for tests
+const fresh = (e: { since: number }, now: number) => now - e.since < LOCK_MS;
+/** Milliseconds this caller must wait before trying this account again; 0 = go ahead. */
+export function accountGate(key: string, pair: string): number {
+  const now = Date.now(), e = accts.get(key);
+  if (!e || !fresh(e, now) || now >= e.next) return 0;
+  if ((goodPairs.get(pair) ?? 0) > now) return 0;
+  return e.next - now;
 }
-export const clearAccount = (key: string) => void accts.delete(key); // a correct password is the owner: forget the failures
-export const resetThrottle = () => fails.clear(); // for tests
+export function accountFail(key: string) {
+  const now = Date.now(); let e = accts.get(key);
+  if (!e || !fresh(e, now)) {
+    if (!e) { // new entry: make room by dropping expired ones only; if still full, do not track
+      if (accts.size >= limits.cap) for (const [k, v] of accts) if (!fresh(v, now)) accts.delete(k);
+      if (accts.size >= limits.cap) return;
+    }
+    e = { n: 0, since: now, next: 0 }; accts.set(key, e);
+  }
+  e.n += 1; e.next = now + Math.min(ACCT_MAX_MS, Math.max(0, e.n - ACCT_FREE) * ACCT_STEP_MS);
+}
+export const accountFails = (key: string) => accts.get(key)?.n ?? 0;
+/** A correct password: forget the failures and remember this email+IP as a known place of the owner. */
+export function accountOk(key: string, pair: string) {
+  accts.delete(key);
+  const now = Date.now();
+  if (goodPairs.size >= limits.cap) for (const [k, v] of goodPairs) if (v <= now) goodPairs.delete(k);
+  if (goodPairs.size < limits.cap || goodPairs.has(pair)) goodPairs.set(pair, now + PAIR_TTL_MS);
+}
+export const resetThrottle = () => { fails.clear(); accts.clear(); goodPairs.clear(); }; // for tests
 
 // ---- permissions ----
 // admin and dpo: everything. member: only their own department. auditor: read everything, change nothing.

@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addrProblem, embeddedV4, ipGroup, pinnedFetch } from "./net.js";
 import { aiUrlProblem } from "./ai.js";
-import { accountAttempt, clearAccount } from "./auth.js";
+import { accountFail, accountFails, accountGate, accountOk, limits, resetThrottle } from "./auth.js";
 import { aiConfig } from "./ai.js";
 import { getApiKey } from "./secret.js";
 import { openDb } from "./db.js";
@@ -38,36 +38,64 @@ describe("outbound address guard", () => {
   });
 });
 
-describe("per-account rate limit", () => {
-  afterEach(() => vi.useRealTimers());
-  it("is free for 10 attempts, then one attempt per growing pause; parallel requests cannot slip through", () => {
-    vi.useFakeTimers(); const k = "rate@x.id"; clearAccount(k);
-    for (let i = 0; i < 10; i++) expect(accountAttempt(k)).toBe(0);
-    expect(accountAttempt(k)).toBe(0); // 11th goes through and sets a 200 ms pause
-    for (let i = 0; i < 20; i++) expect(accountAttempt(k)).toBeGreaterThan(0); // a burst of parallel tries is refused
-    vi.advanceTimersByTime(200); expect(accountAttempt(k)).toBe(0);
-    for (let i = 0; i < 30; i++) { vi.advanceTimersByTime(5000); expect(accountAttempt(k)).toBe(0); }
-    expect(accountAttempt(k)).toBeLessThanOrEqual(2000); // never longer than 2 s: not a lock
-    vi.advanceTimersByTime(2000); expect(accountAttempt(k)).toBe(0);
-    clearAccount(k); expect(accountAttempt(k)).toBe(0);
+describe("per-account rate limit (final design)", () => {
+  afterEach(() => { vi.useRealTimers(); limits.cap = 10_000; resetThrottle(); });
+  it("only failures count: free for 10, then a pause of up to 30 s for unknown places; a known pair is never held back", () => {
+    vi.useFakeTimers(); resetThrottle(); const k = "gate@x.id";
+    for (let i = 0; i < 10; i++) accountFail(k);
+    expect(accountGate(k, `${k}|1.1.1.1`)).toBe(0);
+    accountFail(k); expect(accountGate(k, `${k}|1.1.1.1`)).toBe(1000);
+    for (let i = 0; i < 100; i++) accountFail(k);
+    expect(accountGate(k, `${k}|1.1.1.1`)).toBe(30_000); // capped: a pause, not a lock
+    accountOk(k, `${k}|9.9.9.9`); // owner signs in from a usual address
+    for (let i = 0; i < 20; i++) accountFail(k);
+    expect(accountGate(k, `${k}|9.9.9.9`)).toBe(0);
+    expect(accountGate(k, `${k}|1.1.1.1`)).toBeGreaterThan(0);
+    vi.advanceTimersByTime(30_001); expect(accountGate(k, `${k}|1.1.1.1`)).toBe(0);
   });
-  it("flooding with fake emails evicts old entries one by one but does not reset a busy account", () => {
-    vi.useFakeTimers(); const k = "victim@x.id"; clearAccount(k);
-    for (let i = 0; i < 12; i++) accountAttempt(k); // 12th sets a pause
-    for (let i = 0; i < 10_100; i++) { accountAttempt(`fake${i}@x.id`); if (i % 500 === 0) accountAttempt(k); } // victim stays recent
-    expect(accountAttempt(k)).toBeGreaterThan(0);
+  it("a full map does not track new accounts and never drops active ones", () => {
+    vi.useFakeTimers(); resetThrottle(); limits.cap = 20;
+    for (let i = 0; i < 12; i++) accountFail("busy@x.id");
+    for (let i = 0; i < 500; i++) accountFail(`real${i}@x.id`); // many different real accounts failing once
+    expect(accountFails("busy@x.id")).toBe(12); // still counted, not reset
+    expect(accountFails("real499@x.id")).toBe(0); // beyond the cap: untracked, falls back to pair and IP limits
+    accountFail("busy@x.id"); expect(accountFails("busy@x.id")).toBe(13);
+    vi.advanceTimersByTime(16 * 60_000); accountFail("later@x.id"); expect(accountFails("later@x.id")).toBe(1); // expired entries make room
   });
-  it("over HTTP: after many wrong guesses from different addresses even the right password waits briefly, then works", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+  const world = async () => {
     const db = openDb(":memory:"); await createUser(db, { email: "own@x.id", name: "O", role: "admin", password: "correct horse battery" });
     const app = createApp(db);
-    const at = (ip: string, password: string) => app.request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "patuh" }, body: JSON.stringify({ email: "own@x.id", password }) }, { incoming: { socket: { remoteAddress: ip } } });
-    for (let i = 0; i < 11; i++) await at(`198.51.100.${i}`, "wrong wrong wrong");
-    const early = await at("198.51.100.99", "correct horse battery");
-    expect(early.status).toBe(429); expect(early.headers.get("retry-after")).toBe("1");
-    vi.setSystemTime(Date.now() + 3000);
-    expect((await at("198.51.100.99", "correct horse battery")).status).toBe(200);
-  });
+    const at = (ip: string, password: string, email = "own@x.id") => app.request("/api/auth/login", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "patuh" }, body: JSON.stringify({ email, password }) }, { incoming: { socket: { remoteAddress: ip } } });
+    return { at };
+  };
+  it("an attacker hammering the account cannot lock out the owner's known address; strangers wait", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); resetThrottle();
+    const { at } = await world();
+    expect((await at("192.0.2.1", "correct horse battery")).status).toBe(200); // owner's usual address
+    for (let i = 0; i < 12; i++) await at(`198.51.100.${i}`, "wrong wrong wrong"); // attacker from many addresses
+    const stranger = await at("203.0.113.50", "correct horse battery");
+    expect(stranger.status).toBe(429); expect(Number(stranger.headers.get("retry-after"))).toBeLessThanOrEqual(30);
+    expect((await at("192.0.2.1", "correct horse battery")).status).toBe(200); // the owner is not held back
+    for (let i = 20; i < 32; i++) await at(`198.51.100.${i}`, "wrong wrong wrong"); // attacker again
+    vi.setSystemTime(Date.now() + 31_000);
+    expect((await at("203.0.113.50", "correct horse battery")).status).toBe(200); // the pause ends by itself
+  }, 30_000);
+  it("a flood of fake emails creates no account state and does not reset an active counter", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); resetThrottle(); limits.cap = 5;
+    const { at } = await world();
+    for (let i = 0; i < 12; i++) await at(`198.51.100.${i}`, "wrong wrong wrong");
+    const before = accountFails("own@x.id");
+    for (let i = 0; i < 12; i++) await at(`203.0.113.${i}`, "wrong wrong wrong", `fake${i}@x.id`);
+    expect(accountFails("fake0@x.id")).toBe(0);
+    expect(accountFails("own@x.id")).toBe(before);
+  }, 60_000);
+  it("concurrent wrong guesses are all counted", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); resetThrottle();
+    const { at } = await world();
+    const rs = await Promise.all(Array.from({ length: 6 }, (_, i) => at(`198.51.100.${i}`, "wrong wrong wrong")));
+    expect(accountFails("own@x.id")).toBe(rs.filter((r) => r.status === 401).length);
+    expect(accountFails("own@x.id")).toBeGreaterThan(1);
+  }, 30_000);
 });
 
 describe("AI key stays with its endpoint", () => {

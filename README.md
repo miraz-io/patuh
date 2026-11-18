@@ -139,7 +139,7 @@ it does not replace a lawyer or your data protection officer, and the rules in `
 
 Security notes: sessions are random tokens in HttpOnly, SameSite cookies (only a hash is stored); every change needs a
 CSRF header; each record is checked against the signed-in user's department; every change is written to an audit log, as are DPIA exports, library searches and AI chats (who, when, what; never the text);
-login attempts are throttled per email and IP address together (5 wrong passwords lock that pair for 15 minutes, so an outsider cannot lock your admin out from another address) and per IP (30 failures; IPv6 clients are grouped by /64). On top of that an account gets a growing delay (up to 2 s per try) after 10 failures from any address, which slows distributed guessing without ever locking the owner out. Behind a proxy set `PATUH_TRUST_PROXY=1`. Throttling is in memory, so run a single server, or add a
+login attempts are throttled per email and IP address together (5 wrong passwords lock that pair for 15 minutes, so an outsider cannot lock your admin out from another address) and per IP (30 failures; IPv6 clients are grouped by /64). On top of that, an existing account gets a pause of up to 30 s per try for addresses that never signed in as it before, after 10 failures from anywhere (never a lock; see `SECURITY.md`). Throttling is in memory, so run a single server, or add a
 shared store if you scale out. Editing a signed-off process without sign-off rights withdraws the signature. The database
 file is created readable by its owner only.
 

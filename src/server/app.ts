@@ -15,7 +15,7 @@ import { decide } from "./proposals.js";
 import { getUnit, listSources, searchLibrary } from "./library.js";
 import { REQUIRED_FIELDS, questionFor } from "../core/completeness.js";
 import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, createSession, endSession, findUserByEmail,
-  IP_MAX_FAILS, accountAttempt, clearAccount, isLocked, recordFail, refundFail, userForSession, verifyPassword, type User } from "./auth.js";
+  IP_MAX_FAILS, accountFail, accountGate, accountOk, isLocked, recordFail, refundFail, userForSession, verifyPassword, type User } from "./auth.js";
 import { finishLogin, startLogin, userForSso, type OidcConfig } from "./oidc.js";
 import { demoLoaded } from "./demo.js";
 import { buildOverview, type OvActivity, type OvControl, type OvRisk } from "../core/overview.js";
@@ -82,16 +82,18 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     const ip = ipGroup(clientIp(c)), pair = `${key}|${ip}`, ipKey = `ip|${ip}`;
     if (isLocked(pair) || isLocked(ipKey)) return err(c, 429, "Too many attempts. Try again in 15 minutes.");
     // ponytail: global cap on concurrent password checks (each costs ~32 MB). Add a per-IP limit at your reverse proxy.
-    const wait = accountAttempt(key); // many attempts from anywhere: a short enforced pause per account, never a lock
-    if (wait) { c.header("Retry-After", String(Math.ceil(wait / 1000))); return err(c, 429, "Too many attempts. Wait a moment and try again."); }
     if (hashing >= 8) return err(c, 429, "Server busy, try again shortly");
+    const user = findUserByEmail(db, email); // account state exists only for real accounts
+    if (user) { // after the busy check, before any budget is spent
+      const wait = accountGate(key, pair);
+      if (wait) { c.header("Retry-After", String(Math.ceil(wait / 1000))); return err(c, 429, "Too many attempts for this account. Wait a moment and try again."); }
+    }
     recordFail(pair); recordFail(ipKey, IP_MAX_FAILS); // count the attempt BEFORE the slow check, so a burst of parallel guesses cannot all slip past the limit
     hashing++;
     let ok: boolean;
-    const user = findUserByEmail(db, email);
     try { ok = await verifyPassword(password, user?.password_hash ?? null); } finally { hashing--; } // same work whether or not the user exists
-    if (!user || !ok || user.disabled) { return err(c, 401, "Wrong email or password"); }
-    clearFails(pair); clearAccount(key); refundFail(ipKey);
+    if (!user || !ok || user.disabled) { if (user) accountFail(key); return err(c, 401, "Wrong email or password"); } // only real accounts get account state
+    clearFails(pair); refundFail(ipKey); accountOk(key, pair);
     setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts, maxAge: SESSION_MS / 1000 });
     db.prepare("INSERT INTO audit_log (email,method,path,status) VALUES (?,?,?,?)").run(user.email, "POST", "/api/auth/login", 200);
     return c.json({ ok: true });
