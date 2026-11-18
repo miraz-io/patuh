@@ -65,7 +65,7 @@ export function importSources(db: DatabaseSync, files: { name: string; content: 
 
 export function importLibraryDir(db: DatabaseSync, dir: string) {
   if (!existsSync(dir)) return { sources: 0, units: 0 };
-  const files = readdirSync(dir).filter((f) => f.endsWith(".md") && f.toLowerCase() !== "readme.md").sort().map((name) => ({ name, content: readFileSync(join(dir, name), "utf8") }));
+  const files = readdirSync(dir).filter((f) => f.endsWith(".md") && !["readme.md", "verified.md"].includes(f.toLowerCase())).sort().map((name) => ({ name, content: readFileSync(join(dir, name), "utf8") }));
   const map = join(dir, "mappings.csv");
   return importSources(db, files, existsSync(map) ? readFileSync(map, "utf8") : "");
 }
