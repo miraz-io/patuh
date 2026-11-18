@@ -33,9 +33,10 @@ export function decrypt(db: DatabaseSync, stored: string): string | null {
   } catch { return null; } // wrong PATUH_SECRET or lost key file
 }
 
-/** The AI key: PATUH_AI_API_KEY wins; otherwise the encrypted setting. Plaintext left by older versions is encrypted on first read. */
+/** The AI key. PATUH_AI_API_KEY counts only together with PATUH_AI_BASE_URL (aiConfig then uses that address too), so an admin cannot point the operator's key at another host.
+ *  Otherwise the encrypted setting; plaintext left by older versions is encrypted on first read. */
 export function getApiKey(db: DatabaseSync): string {
-  if (process.env.PATUH_AI_API_KEY) return process.env.PATUH_AI_API_KEY;
+  if (process.env.PATUH_AI_API_KEY && process.env.PATUH_AI_BASE_URL) return process.env.PATUH_AI_API_KEY;
   const v = getSetting(db, "ai_api_key");
   if (!v) return "";
   if (!v.startsWith(PREFIX)) { setSetting(db, "ai_api_key", encrypt(db, v)); return v; }

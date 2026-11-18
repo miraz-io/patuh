@@ -5,6 +5,7 @@ import { CRITERIA } from "../core/screening.js";
 import { getSetting, createActivity, updateActivity, type Row } from "./db.js";
 import { cleanActivity } from "./validate.js";
 import { getApiKey } from "./secret.js";
+import { BLOCKED, addrProblem, pinnedFetch } from "./net.js";
 
 export class AiError extends Error {}
 export type AiConfig = { baseUrl: string; model: string; apiKey: string };
@@ -12,18 +13,17 @@ export type Msg = { role: "system" | "user" | "assistant"; content: string };
 export type Lang = "en" | "id";
 
 export const aiConfig = (db: DatabaseSync): AiConfig | null => {
-  const baseUrl = getSetting(db, "ai_base_url"), model = getSetting(db, "ai_model");
+  const baseUrl = process.env.PATUH_AI_BASE_URL || getSetting(db, "ai_base_url"), model = getSetting(db, "ai_model");
   return baseUrl && model ? { baseUrl, model, apiKey: getApiKey(db) } : null; // local servers need no key
 };
 
-/** SSRF guard: link-local and cloud-metadata addresses are never a valid AI endpoint. Private LAN and localhost stay allowed (Ollama, vLLM). Literal hosts only: DNS names are not resolved here. */
+/** SSRF guard at save time: literal hosts only (names are checked again at connect time by pinnedFetch). Link-local and cloud-metadata addresses are never valid. */
 export function aiUrlProblem(raw: string): string | null {
   let u: URL; try { u = new URL(raw); } catch { return "Enter a full address starting with http:// or https://"; }
   if (!["http:", "https:"].includes(u.protocol)) return "Enter a full address starting with http:// or https://";
-  const h = u.hostname.toLowerCase();
-  if (/^169\.254\./.test(h) || /^\[fe[89ab][0-9a-f]:/.test(h) || /^\[::ffff:a9fe:/.test(h) || h === "[fd00:ec2::254]" || h === "metadata.google.internal" || h === "metadata")
-    return "That address is not allowed (link-local or cloud metadata)";
-  return null;
+  const h = u.hostname.toLowerCase().replace(/\.+$/, "");
+  if (h === "metadata.google.internal" || h === "metadata" || h.endsWith(".metadata.google.internal")) return BLOCKED;
+  return addrProblem(h);
 }
 
 export type ToolCall = { id: string; name: string; args: string };
@@ -31,7 +31,7 @@ export type RawMsg = { role: "system" | "user" | "assistant" | "tool"; content?:
 export type Usage = { prompt: number; completion: number };
 
 /** One call to /chat/completions, optionally with tools. Returns the raw assistant message so a tool loop can continue from it. */
-export async function chatRaw(cfg: AiConfig, messages: RawMsg[], tools?: unknown[], f: typeof fetch = fetch): Promise<{ content: string; calls: ToolCall[]; message: RawMsg; usage: Usage }> {
+export async function chatRaw(cfg: AiConfig, messages: RawMsg[], tools?: unknown[], f: typeof fetch = pinnedFetch): Promise<{ content: string; calls: ToolCall[]; message: RawMsg; usage: Usage }> {
   let r: Response;
   const bad = aiUrlProblem(cfg.baseUrl); if (bad) throw new AiError(bad);
   try {
@@ -51,10 +51,10 @@ export async function chatRaw(cfg: AiConfig, messages: RawMsg[], tools?: unknown
     message: { role: "assistant", content: content || null, ...(calls.length ? { tool_calls: m!.tool_calls } : {}) } };
 }
 
-export async function complete(cfg: AiConfig, messages: Msg[], f: typeof fetch = fetch): Promise<string> {
+export async function complete(cfg: AiConfig, messages: Msg[], f: typeof fetch = pinnedFetch): Promise<string> {
   return (await completeUsage(cfg, messages, f)).content;
 }
-export async function completeUsage(cfg: AiConfig, messages: Msg[], f: typeof fetch = fetch) {
+export async function completeUsage(cfg: AiConfig, messages: Msg[], f: typeof fetch = pinnedFetch) {
   const r = await chatRaw(cfg, messages, undefined, f);
   if (!r.content.trim()) throw new AiError("The AI provider returned no text");
   return r;

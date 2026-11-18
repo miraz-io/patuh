@@ -66,6 +66,16 @@ export function recordFail(key: string, max = MAX_FAILS) {
 }
 export const clearFails = (key: string) => void fails.delete(key);
 export const refundFail = (key: string) => { const f = fails.get(key); if (f && f.n > 0) f.n -= 1; }; // a successful sign-in does not count against the IP
+// Per account, from any address: slows guessing (up to 2 s per try) but never locks, so nobody can deny the owner their own account.
+const accts = new Map<string, { n: number; since: number }>();
+export const ACCT_FREE = 10, ACCT_STEP_MS = 200, ACCT_MAX_MS = 2000;
+export function recordAccountFail(key: string) {
+  const now = Date.now(); if (accts.size > 10_000) accts.clear();
+  const a = accts.get(key);
+  accts.set(key, a && now - a.since < LOCK_MS ? { n: a.n + 1, since: a.since } : { n: 1, since: now });
+}
+export const accountDelay = (key: string) => { const a = accts.get(key); return a && Date.now() - a.since < LOCK_MS ? Math.min(ACCT_MAX_MS, Math.max(0, a.n - ACCT_FREE) * ACCT_STEP_MS) : 0; };
+export const clearAccount = (key: string) => void accts.delete(key);
 export const resetThrottle = () => fails.clear(); // for tests
 
 // ---- permissions ----

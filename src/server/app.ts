@@ -7,6 +7,7 @@ import { CRITERIA, screen } from "../core/screening.js";
 import { needsPriorConsultation, riskLevel } from "../core/risk.js";
 import { dpiaBuffer, type Activity, type Lang, type RiskRow } from "../core/dpia.js";
 import { hasApiKey, setApiKey } from "./secret.js";
+import { ipGroup } from "./net.js";
 import { createActivity, getSetting, setSetting, updateActivity } from "./db.js";
 import { AiError, aiConfig, aiUrlProblem, complete, completeUsage, createFromDraft, draftMessages, extractJson, logInteraction, purgeAiText, setMeta, type AiConfig, type Turn } from "./ai.js";
 import { activityState, runAgent } from "./agent.js";
@@ -14,7 +15,7 @@ import { decide } from "./proposals.js";
 import { getUnit, listSources, searchLibrary } from "./library.js";
 import { REQUIRED_FIELDS, questionFor } from "../core/completeness.js";
 import { SESSION_COOKIE, SESSION_MS, canRead, canSignOff, canWrite, clearFails, createSession, endSession, findUserByEmail,
-  IP_MAX_FAILS, isLocked, recordFail, refundFail, userForSession, verifyPassword, type User } from "./auth.js";
+  IP_MAX_FAILS, accountDelay, clearAccount, isLocked, recordAccountFail, recordFail, refundFail, userForSession, verifyPassword, type User } from "./auth.js";
 import { finishLogin, startLogin, userForSso, type OidcConfig } from "./oidc.js";
 import { demoLoaded } from "./demo.js";
 import { buildOverview, type OvActivity, type OvControl, type OvRisk } from "../core/overview.js";
@@ -38,6 +39,7 @@ const clientIp = (c: Context): string => {
   if (process.env.PATUH_TRUST_PROXY === "1") { const x = c.req.header("x-forwarded-for")?.split(",").pop()?.trim(); if (x) return x.slice(0, 64); }
   return ((c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? "unknown").slice(0, 64);
 };
+const originOf = (u: string) => { try { return new URL(u).origin; } catch { return ""; } };
 
 export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
   const app = new Hono<Env>();
@@ -77,17 +79,18 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (!email || !password) return err(c, 400, "email and password required");
     const key = email.trim().toLowerCase();
     // Lock the email+IP pair (5 fails) and, more loosely, the IP (30 fails): an outsider cannot lock the admin out from their own address.
-    const ip = clientIp(c), pair = `${key}|${ip}`, ipKey = `ip|${ip}`;
+    const ip = ipGroup(clientIp(c)), pair = `${key}|${ip}`, ipKey = `ip|${ip}`;
     if (isLocked(pair) || isLocked(ipKey)) return err(c, 429, "Too many attempts. Try again in 15 minutes.");
     // ponytail: global cap on concurrent password checks (each costs ~32 MB). Add a per-IP limit at your reverse proxy.
+    const slow = accountDelay(key); if (slow) await new Promise((r) => setTimeout(r, slow)); // many failures from anywhere: slow guessing down, never lock the real owner out
     if (hashing >= 8) return err(c, 429, "Server busy, try again shortly");
     recordFail(pair); recordFail(ipKey, IP_MAX_FAILS); // count the attempt BEFORE the slow check, so a burst of parallel guesses cannot all slip past the limit
     hashing++;
     let ok: boolean;
     const user = findUserByEmail(db, email);
     try { ok = await verifyPassword(password, user?.password_hash ?? null); } finally { hashing--; } // same work whether or not the user exists
-    if (!user || !ok || user.disabled) return err(c, 401, "Wrong email or password");
-    clearFails(pair); refundFail(ipKey);
+    if (!user || !ok || user.disabled) { recordAccountFail(key); return err(c, 401, "Wrong email or password"); }
+    clearFails(pair); clearAccount(key); refundFail(ipKey);
     setCookie(c, SESSION_COOKIE, createSession(db, user.id), { ...cookieOpts, maxAge: SESSION_MS / 1000 });
     db.prepare("INSERT INTO audit_log (email,method,path,status) VALUES (?,?,?,?)").run(user.email, "POST", "/api/auth/login", 200);
     return c.json({ ok: true });
@@ -183,7 +186,7 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
 
   app.get("/api/settings", (c) => {
     if (c.get("user").role !== "admin") return err(c, 403, "Only an admin can open settings");
-    return c.json({ ai: { base_url: getSetting(db, "ai_base_url") ?? "", model: getSetting(db, "ai_model") ?? "", hasKey: hasApiKey(db) } }); // the key is never sent back
+    return c.json({ ai: { base_url: process.env.PATUH_AI_BASE_URL || (getSetting(db, "ai_base_url") ?? ""), model: getSetting(db, "ai_model") ?? "", hasKey: hasApiKey(db) } }); // the key is never sent back
   });
   app.put("/api/settings/ai", async (c) => {
     if (c.get("user").role !== "admin") return err(c, 403, "Only an admin can change settings");
@@ -194,6 +197,8 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
       const bad = aiUrlProblem(url!);
       if (bad || !model) return err(c, 400, bad ?? "Enter a full address starting with http:// or https://, and a model name");
     }
+    // A key belongs to the service it was entered for: another origin means the key must be typed again.
+    if (originOf(url ?? "") !== originOf(getSetting(db, "ai_base_url") ?? "")) setApiKey(db, "");
     setSetting(db, "ai_base_url", url); setSetting(db, "ai_model", model);
     if (key !== undefined) setApiKey(db, key); // "" removes it; stored encrypted
     return c.json({ ok: true });

@@ -51,8 +51,8 @@ Admins open **Settings** and enter any OpenAI-compatible service that supports t
 - **Drafts are marked.** Anything an AI wrote shows an "AI draft" or "Assumption" badge until a person confirms it. A process cannot be signed off while it has empty fields or unconfirmed AI drafts. The checklist at the top of each process shows what is left.
 - **New process:** type a name and a few sentences; the AI drafts details, DPIA criteria, risks and controls as unconfirmed drafts.
 - **Audit and quality:** every AI turn is logged (question, sources opened, outcome, tokens, time, and what you did with each proposal). Settings shows the quality numbers (answers with a checked source, dropped statements, acceptance rate, latency, ...) and the questions the library could not answer. Question text is blanked after 180 days (`ai_retention_days` setting); the numbers stay.
-- **Privacy:** the question, the process record and the library units it opens are sent to the service you configure and may contain personal data. Choose a provider that fits your own rules, or host a model yourself. The API key is stored encrypted (AES-256-GCM) in the database; the key comes from `PATUH_SECRET`, or from an auto-created `patuh.key` file (0600) next to the database. Back that file up with the database, or the key cannot be read again. Keys saved as plain text by older versions are encrypted on first use. Instead of storing a key you can set `PATUH_AI_API_KEY` in the environment; it wins over the stored one. The key is never sent back to the browser.
-- **Address check (SSRF):** the API address may not be a link-local or cloud-metadata address (169.254.x.x, fe80::, metadata.google.internal). Private LAN and localhost addresses stay allowed so you can use Ollama or vLLM; only an admin can set the address. DNS names are not resolved before the check, so use an address you trust.
+- **Privacy:** the question, the process record and the library units it opens are sent to the service you configure and may contain personal data. Choose a provider that fits your own rules, or host a model yourself. The API key is stored encrypted (AES-256-GCM) in the database; the key comes from `PATUH_SECRET`, or from an auto-created `patuh.key` file (0600) next to the database. Back that file up with the database, or the key cannot be read again. Keys saved as plain text by older versions are encrypted on first use. Instead of storing a key you can set `PATUH_AI_API_KEY` **together with** `PATUH_AI_BASE_URL` in the environment; the key is only ever sent to that operator-set address, and both win over the stored settings. Without `PATUH_AI_BASE_URL` the environment key is ignored. When an admin changes the stored address to a different origin, the stored key is deleted and must be typed again. The key is never sent back to the browser.
+- **Address check (SSRF):** the API address may not be a link-local or cloud-metadata address (169.254.x.x, fe80::, metadata.google.internal). Private LAN and localhost addresses stay allowed so you can use Ollama or vLLM; only an admin can set the address. Names are resolved at connect time and every resulting address is checked (also IPv4 hidden in IPv6 forms such as `::ffff:169.254.169.254` or NAT64), so DNS rebinding to a metadata address does not work. Redirects are not followed.
 - **Not per department:** the AI is on or off for the whole workspace; switch it off by clearing the address and model in Settings.
 
 ## Regulation library
@@ -113,8 +113,8 @@ and SSO never creates users. ID tokens are verified in Patuh (signature, issuer,
 | `PATUH_HOST` | `127.0.0.1` | Localhost only. To share it, put HTTPS in front and set `PATUH_PUBLIC_URL` to the https address. |
 | `PATUH_DB` | `data/patuh.db` | |
 | `PATUH_SECRET` | auto key file | Secret that encrypts the stored AI key. Without it a `patuh.key` file is created next to the database. |
-| `PATUH_AI_API_KEY` | none | AI key from the environment instead of the database |
-| `PATUH_TRUST_PROXY` | off | Set to `1` behind a reverse proxy so sign-in limits use the `X-Forwarded-For` address |
+| `PATUH_AI_API_KEY`, `PATUH_AI_BASE_URL` | none | AI key and address from the environment instead of the database (use both) |
+| `PATUH_TRUST_PROXY` | off | `1` = take the client address from the last `X-Forwarded-For` entry. Enable **only** behind a trusted reverse proxy that sets or overwrites that header; otherwise anyone can spoof their address and dodge the limits. |
 
 ## One document, two laws
 
@@ -133,7 +133,7 @@ check the official text. The rules live in `src/core/screening.ts` so they are e
 
 Security notes: sessions are random tokens in HttpOnly, SameSite cookies (only a hash is stored); every change needs a
 CSRF header; each record is checked against the signed-in user's department; every change is written to an audit log, as are DPIA exports, library searches and AI chats (who, when, what; never the text);
-login attempts are throttled per email and IP address together (5 wrong passwords lock that pair for 15 minutes, so an outsider cannot lock your admin out from another address) and per IP (30 failures). Behind a proxy set `PATUH_TRUST_PROXY=1`. Throttling is in memory, so run a single server, or add a
+login attempts are throttled per email and IP address together (5 wrong passwords lock that pair for 15 minutes, so an outsider cannot lock your admin out from another address) and per IP (30 failures; IPv6 clients are grouped by /64). On top of that an account gets a growing delay (up to 2 s per try) after 10 failures from any address, which slows distributed guessing without ever locking the owner out. Behind a proxy set `PATUH_TRUST_PROXY=1`. Throttling is in memory, so run a single server, or add a
 shared store if you scale out. Editing a signed-off process without sign-off rights withdraws the signature. The database
 file is created readable by its owner only.
 
