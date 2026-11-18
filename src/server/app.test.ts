@@ -3,6 +3,7 @@ import { createApp } from "./app.js";
 import { openDb } from "./db.js";
 import { createUser, type Role } from "./auth.js";
 import { aiConfig } from "./ai.js";
+import { unzipSync } from "fflate";
 
 const PW = "correct horse battery";
 type App = ReturnType<typeof createApp>;
@@ -138,6 +139,25 @@ describe("permissions", () => {
     await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: COMPLETE });
     expect((await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "DPO" } })).status).toBe(200);
     expect((await call(app, "/api/activities", { cookie: hrUser, body: { department_id: hr, name: "B", signed_by: "Me" } })).status).toBe(403);
+    const got = async () => (await json(await call(app, "/api/activities", { cookie: dpo }))).find((a: any) => a.id === act);
+    expect((await got()).signed_at).toBe(new Date().toISOString().slice(0, 10)); // sign-off records the date
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: hrUser, body: { purpose: "changed" } });
+    expect((await got()).signed_at).toBe(""); // withdrawn with the signature
+  });
+  it("Word export: Indonesian wording, dated signature, readable file name", async () => {
+    const { app, hr } = await setup();
+    const dpo = (await login(app, "dpo@x.id")).cookie;
+    const act = (await json(await call(app, "/api/activities", { cookie: dpo, body: { department_id: hr, name: "Penilaian Kinerja AI", ...COMPLETE, screening: ["vulnerable-subjects", "large-scale"] } }))).id;
+    const rk = (await json(await call(app, `/api/activities/${act}/risks`, { cookie: dpo, body: { title: "r", likelihood: 2, severity: 2 } }))).id;
+    await call(app, `/api/risks/${rk}/controls`, { cookie: dpo, body: { title: "c", status: "done" } });
+    await call(app, `/api/risks/${rk}/confirm`, { method: "POST", cookie: dpo });
+    await call(app, `/api/activities/${act}`, { method: "PATCH", cookie: dpo, body: { signed_by: "Dewi" } });
+    const r = await call(app, `/api/activities/${act}/dpia.docx?lang=id`, { cookie: dpo });
+    expect(r.headers.get("content-disposition")).toContain("penilaian-kinerja-ai-dpia-id.docx");
+    const xml = new TextDecoder().decode(unzipSync(new Uint8Array(await r.arrayBuffer()))["word/document.xml"]);
+    expect(xml).toContain("Selesai"); expect(xml).toContain("Pasal 35"); expect(xml).toContain("Dewi (pada " + new Date().toISOString().slice(0, 10));
+    expect(xml).not.toMatch(/\bdone\b|Art\.|Recital/);
+    expect(xml.split("2. Kebutuhan dan proporsionalitas").length).toBe(2); // heading appears once
   });
 });
 

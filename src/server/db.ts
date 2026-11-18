@@ -100,6 +100,7 @@ export function openDb(path: string): DatabaseSync {
   };
   addColumn("departments", "demo", "INTEGER NOT NULL DEFAULT 0");
   addColumn("activities", "demo", "INTEGER NOT NULL DEFAULT 0");
+  addColumn("activities", "signed_at", "TEXT NOT NULL DEFAULT ''"); // date of sign-off, set by the server
   addColumn("risks", "source", "TEXT NOT NULL DEFAULT 'user'");      // 'ai' until a person confirms it
   addColumn("risks", "confirmed", "INTEGER NOT NULL DEFAULT 1");
   return db;
@@ -108,7 +109,7 @@ export function openDb(path: string): DatabaseSync {
 export type Row = Record<string, string | number | null>;
 export const ACTIVITY_FIELDS = ["name", "purpose", "description", "data_categories", "data_subjects", "ai_system",
   "vendor", "data_location", "cross_border", "legal_basis", "retention", "necessity", "screening", "dpo_advice",
-  "subjects_views", "review_date", "signed_by"] as const;
+  "subjects_views", "review_date", "signed_by", "signed_at"] as const;
 
 export function createActivity(db: DatabaseSync, departmentId: number, input: Row): number {
   const cols = ACTIVITY_FIELDS.filter((f) => input[f] !== undefined);

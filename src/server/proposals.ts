@@ -58,7 +58,7 @@ export function decide(db: DatabaseSync, userId: number, canSign: boolean, id: n
         }
         default: throw { ok: false, code: 400, error: "unknown proposal" };
       }
-      if (!canSign) db.prepare("UPDATE activities SET signed_by='' WHERE id=?").run(act); // changed content needs a fresh sign-off
+      if (!canSign) db.prepare("UPDATE activities SET signed_by='', signed_at='' WHERE id=?").run(act); // changed content needs a fresh sign-off
       mark(status);
     });
   } catch (e) {

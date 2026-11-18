@@ -9,7 +9,7 @@ export type Activity = {
   name: string; department: string; purpose: string; description: string; data_categories: string;
   data_subjects: string; ai_system: string; vendor: string; data_location: string; cross_border: number;
   legal_basis: string; retention: string; necessity: string; screening: string[]; dpo_advice: string;
-  subjects_views: string; review_date: string; signed_by: string;
+  subjects_views: string; review_date: string; signed_by: string; signed_at?: string;
 };
 export type RiskRow = {
   title: string; description: string; likelihood: number; severity: number;
@@ -31,6 +31,7 @@ const T = {
     dpo: "Advice of the data protection officer", views: "Views of the people concerned (or why not sought)",
     consult: "Prior consultation with the authority (GDPR Art. 36 / UU PDP): required because high residual risk remains.",
     consultNo: "Prior consultation with the authority: not triggered (no high residual risk).",
+    nec: "Why is this necessary and proportionate?", signedOn: "on", st: { planned: "Planned", "in-progress": "In progress", done: "Done" } as Record<string, string>,
     review: "Next review date (also when the processing or risk changes)", signed: "Signed off by", todo: "(to be completed)",
     law: (b: string) => b === "uu-pdp" ? "UU PDP No. 27/2022 Article 34(2): at least one high-risk category applies."
       : b === "gdpr-two-criteria" ? "GDPR Art. 35 / EDPB criteria: two or more criteria apply."
@@ -48,11 +49,12 @@ const T = {
     triggers: "Mengapa DPIA diperlukan", none: "Tidak ada kriteria berisiko tinggi yang dipilih.",
     inh: "Risiko awal", res: "Risiko residual", ctl: "Kontrol", owner: "Penanggung jawab", due: "Tenggat", status: "Status",
     dpo: "Saran Pejabat Pelindungan Data Pribadi (PPDP)", views: "Pandangan subjek data (atau alasan tidak diminta)",
-    consult: "Konsultasi dengan Lembaga (UU PDP / GDPR Art. 36): diperlukan karena masih ada risiko residual tinggi.",
+    consult: "Konsultasi dengan Lembaga (UU PDP / GDPR Pasal 36): diperlukan karena masih ada risiko residual tinggi.",
     consultNo: "Konsultasi dengan Lembaga: tidak terpicu (tidak ada risiko residual tinggi).",
+    nec: "Mengapa ini perlu dan proporsional?", signedOn: "pada", st: { planned: "Direncanakan", "in-progress": "Berjalan", done: "Selesai" } as Record<string, string>,
     review: "Tanggal peninjauan berikutnya (juga bila pemrosesan atau risiko berubah)", signed: "Disahkan oleh", todo: "(belum diisi)",
     law: (b: string) => b === "uu-pdp" ? "UU PDP No. 27/2022 Pasal 34 ayat (2): sedikitnya satu kategori berisiko tinggi berlaku."
-      : b === "gdpr-two-criteria" ? "GDPR Art. 35 / kriteria EDPB: dua kriteria atau lebih berlaku."
+      : b === "gdpr-two-criteria" ? "GDPR Pasal 35 / kriteria EDPB: dua kriteria atau lebih berlaku."
       : "Penilaian sukarela (tidak ada kriteria wajib yang terpenuhi).",
     lvl: { low: "Rendah", medium: "Sedang", high: "Tinggi", "very-high": "Sangat tinggi" } as Record<Level, string>,
   },
@@ -73,8 +75,9 @@ export function buildDpia(a: Activity, risks: RiskRow[], lang: Lang): Document {
   const residual = risks.map((r) =>
     riskLevel(r.residual_likelihood ?? r.likelihood, r.residual_severity ?? r.severity).level);
   const v = (x: string) => x || t.todo;
+  const ref = (x: string) => (lang === "id" ? x.replace(/\bArt\./g, "Pasal").replace(/\bRecital\b/g, "Konsiderans").replace(/\bcriterion\b/g, "kriteria") : x);
   const trig = CRITERIA.filter((c) => s.matched.includes(c.id))
-    .map((c) => `• ${lang === "en" ? c.en : c.id_}${c.uu ? ` [UU PDP 34(2)${c.uu}]` : ""} [${c.gdpr}]`);
+    .map((c) => `• ${lang === "en" ? c.en : c.id_}${c.uu ? ` [UU PDP ${lang === "id" ? "Pasal " : ""}34(2)${c.uu}]` : ""} [${ref(c.gdpr)}]`);
 
   return new Document({ sections: [{ children: [
     new Paragraph({ text: t.title, heading: HeadingLevel.TITLE }),
@@ -86,19 +89,19 @@ export function buildDpia(a: Activity, risks: RiskRow[], lang: Lang): Document {
       [t.xb, a.cross_border ? t.yes : t.no]]),
     p(`${t.triggers}:`), ...(trig.length ? trig.map(p) : [p(t.none)]),
     h(t.s2),
-    table([[t.lb, v(a.legal_basis)], [t.ret, v(a.retention)], [t.s2, v(a.necessity)]]),
+    table([[t.lb, v(a.legal_basis)], [t.ret, v(a.retention)], [t.nec, v(a.necessity)]]),
     h(t.s3),
     table([["", t.inh, t.res], ...risks.map((r) => [
       `${r.title}${r.description ? ` – ${r.description}` : ""}`, lvl(r.likelihood, r.severity),
       lvl(r.residual_likelihood ?? r.likelihood, r.residual_severity ?? r.severity)])], true),
     h(t.s4),
     table([[t.ctl, `${t.owner} / ${t.due} / ${t.status}`],
-      ...risks.flatMap((r) => r.controls.map((c) => [`${r.title}: ${c.title}`, `${c.owner} / ${c.due} / ${c.status}`]))], true),
+      ...risks.flatMap((r) => r.controls.map((c) => [`${r.title}: ${c.title}`, `${c.owner} / ${c.due} / ${t.st[c.status] ?? c.status}`]))], true),
     h(t.s5),
     table([[t.dpo, v(a.dpo_advice)], [t.views, v(a.subjects_views)]]),
     p(needsPriorConsultation(residual) ? t.consult : t.consultNo),
     h(t.s6),
-    table([[t.review, v(a.review_date)], [t.signed, v(a.signed_by)]]),
+    table([[t.review, v(a.review_date)], [t.signed, a.signed_by ? `${a.signed_by}${a.signed_at ? ` (${t.signedOn} ${a.signed_at})` : ""}` : t.todo]]),
   ] }] });
 }
 

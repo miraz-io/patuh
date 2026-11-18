@@ -29,6 +29,8 @@ const one = (db: DatabaseSync, sql: string, ...a: (string | number)[]) => db.pre
 const err = (c: Context, status: 400 | 401 | 403 | 404 | 429 | 502, msg: string) => c.json({ error: msg }, status);
 const body = async (c: Context) => ((await c.req.json().catch(() => null)) ?? null) as Record<string, unknown> | null;
 const isObj = (b: unknown): b is Record<string, unknown> => !!b && typeof b === "object" && !Array.isArray(b);
+/** ASCII file name from the process name, so downloads are recognisable and header-safe. */
+export const fileSlug = (s: string) => s.normalize("NFKD").replace(/[^\x00-\x7f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "process";
 const int = (v: string) => (/^\d{1,9}$/.test(v) ? Number(v) : NaN);
 
 // Behind a reverse proxy set PATUH_TRUST_PROXY=1 so the client address comes from X-Forwarded-For (the last hop, which the proxy appended).
@@ -357,12 +359,12 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     if (!canSignOff(u) && Object.keys(v.value).length) v.value.signed_by = "";
     const sign = typeof v.value.signed_by === "string" && v.value.signed_by.trim() !== "" && canSignOff(u);
     const { signed_by, ...rest } = v.value;
-    updateActivity(db, id, sign ? rest : v.value);
+    updateActivity(db, id, sign ? rest : v.value.signed_by === "" ? { ...v.value, signed_at: "" } : v.value); // a withdrawn signature loses its date
     for (const k of Object.keys(rest)) if (!["name", "dpo_advice", "review_date"].includes(k)) setMeta(db, id, k, "user", true); // typed by a person
     if (sign) { // no signature while anything an AI wrote is unconfirmed
       const left = activityState(db, id).comp.gaps.length;
       if (left) return err(c, 400, `Not ready to sign off: ${left} item(s) are still empty or unconfirmed AI drafts. See the checklist on this page.`);
-      updateActivity(db, id, { signed_by });
+      updateActivity(db, id, { signed_by, signed_at: new Date().toISOString().slice(0, 10) });
     }
     return c.json({ ok: true });
   });
@@ -428,7 +430,7 @@ export function createApp(db: DatabaseSync, opts: AppOptions = {}) {
     const buf = await dpiaBuffer({ ...(row as unknown as Activity), screening: JSON.parse(row.screening as string) }, risks, lang);
     return new Response(new Uint8Array(buf), { headers: {
       "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "content-disposition": `attachment; filename="dpia-${id}-${lang}.docx"` } });
+      "content-disposition": `attachment; filename="${fileSlug(String(row.name))}-dpia-${lang}.docx"` } });
   });
 
   // One row per process: is a DPIA needed, how many risks, open controls, is residual risk still high.

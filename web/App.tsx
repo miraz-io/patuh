@@ -18,7 +18,7 @@ type Nav = "dashboard" | "processes" | "library" | "tutorials" | "settings";
 type Comp = { items: { key: string; state: string }[]; confirmed: number; total: number; ready: boolean; gaps: { key: string; kind: string; state: string; question: string; risk_id?: number }[]; meta: Record<string, { source: string; confirmed: boolean }> };
 
 export function App() {
-  const [lang, setLang] = useState<Lang>(() => (navigator.language.startsWith("id") ? "id" : "en"));
+  const [lang, setLang] = useState<Lang>(() => { try { const l = localStorage.getItem("patuh_lang"); if (l === "en" || l === "id") return l; } catch { /* storage blocked */ } return navigator.language.startsWith("id") ? "id" : "en"; });
   const [me, setMe] = useState<Me | null | undefined>(undefined); // undefined = still checking, null = signed out
   const [error, setError] = useState("");
   const [page, setPage] = useState<Nav>("dashboard");
@@ -31,6 +31,8 @@ export function App() {
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [tour, setTour] = useState<Tour | null>(null);
   const t = TXT[lang];
+  useEffect(() => { try { localStorage.setItem("patuh_lang", lang); } catch { /* storage blocked */ } }, [lang]);
+  useEffect(() => window.scrollTo(0, 0), [page, open]); // a new screen starts at the top
   useEffect(() => setError(""), [page, open, me?.user.id]); // an error belongs to the screen where it happened
 
   const loadMe = useCallback(() => api<Me>("/api/auth/me").then(setMe).catch(() => setMe(null)), []);
@@ -169,7 +171,7 @@ type RiskData = { id: number; source?: string; confirmed?: number; title: string
 function Detail({ act, res, me, criteria, lang, t, reload, back, fresh }: { act: Activity; res?: DashRow; me: Me; criteria: Criterion[]; lang: Lang; t: T; reload: () => void; back: () => void; fresh: boolean }) {
   const [risks, setRisks] = useState<RiskData[]>([]);
   const [form, setForm] = useState({ title: "", l: 2, s: 2 });
-  const [comp, setComp] = useState<Comp | null>(null);
+  const [comp, setComp] = useState<Comp | null>(null); const [allGaps, setAllGaps] = useState(false);
   const ro = !canWriteDept(me, act.department_id), signoff = canSignOff(me);
   const save = async (patch: Record<string, unknown>) => { try { await api(`/api/activities/${act.id}`, "PATCH", patch); } finally { reload(); } };
   const loadRisks = useCallback(async () => setRisks(await api<RiskData[]>(`/api/activities/${act.id}/risks`)), [act.id]);
@@ -192,9 +194,9 @@ function Detail({ act, res, me, criteria, lang, t, reload, back, fresh }: { act:
     {comp && <Card data-tour="completeness" className="space-y-2"><div className="flex items-center justify-between gap-3"><h2 className="font-medium">{t.comp.title}</h2>
         <span className="text-sm text-muted-foreground">{t.comp.progress.replace("{n}", String(comp.confirmed)).replace("{m}", String(comp.total))}</span></div>
       <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-green-600" style={{ width: `${(comp.confirmed / Math.max(1, comp.total)) * 100}%` }} /></div>
-      {comp.ready ? <p className="text-sm text-green-600">{t.comp.ready}</p> : <ul className="space-y-1.5 pt-1 text-sm">{comp.gaps.slice(0, 4).map((g) => <li key={g.key} className="flex flex-wrap items-start gap-2">
+      {comp.ready ? <p className="text-sm text-green-600">{t.comp.ready}</p> : <ul className="space-y-1.5 pt-1 text-sm">{comp.gaps.slice(0, allGaps ? 99 : 4).map((g) => <li key={g.key} className="flex flex-wrap items-start gap-2">
         <Badge tone={g.state === "draft" ? "amber" : "gray"}>{g.state === "draft" ? t.comp.draft : t.comp.empty}</Badge><span><span className="font-medium">{gapLabel(g)}</span>{g.state === "empty" && <span className="text-muted-foreground"> · {g.question}</span>}</span></li>)}
-        {comp.gaps.length > 4 && <li className="text-xs text-muted-foreground">+{comp.gaps.length - 4}</li>}</ul>}</Card>}
+        {comp.gaps.length > 4 && <li><button type="button" className="text-xs underline" onClick={() => setAllGaps(!allGaps)}>{allGaps ? t.comp.less : t.comp.more.replace("{n}", String(comp.gaps.length - 4))}</button></li>}</ul>}</Card>}
     <fieldset disabled={ro} className="space-y-6">
       <Card data-tour="screening"><h2 className="mb-3 flex flex-wrap items-center gap-2 font-medium">{t.screening}{prov("screening")}{!ro && !ticked.size && comp?.items.find((i) => i.key === "screening")?.state === "empty" && <Btn type="button" variant="outline" onClick={() => confirm(["screening"])}>{t.comp.confirmAll}</Btn>}</h2>
         {res && <p role="status" data-tour="screen-result" className={`mb-3 rounded-md p-3 text-sm ${res.dpiaRequired ? "bg-amber-500/15 text-amber-700" : "bg-muted"}`}><span className="font-semibold">{t.screenResult.title} {res.dpiaRequired ? t.screenResult.yes : t.screenResult.no}.</span> {res.basis === "uu-pdp" ? t.screenResult.uuPdp : res.basis === "gdpr-two-criteria" ? t.screenResult.gdpr : t.screenResult.none}</p>}
@@ -203,8 +205,10 @@ function Detail({ act, res, me, criteria, lang, t, reload, back, fresh }: { act:
           <span>{lang === "en" ? c.en : c.id_} <span className="text-xs text-muted-foreground">{c.uu ? `UU PDP 34(2)${c.uu} · ` : ""}{c.gdpr}</span></span></label>)}</Card>
       <Card data-tour="details" className="space-y-3"><h2 className="font-medium">{t.details}</h2>
         {Object.entries(t.fields).map(([k, label]) => <label key={k} data-tour={k === "dpo_advice" ? "dpo-advice" : undefined} className="block text-sm"><span className="mb-1 flex items-center gap-2 text-muted-foreground">{label}{prov(k)}</span>
-          <textarea key={`${k}:${act[k] ?? ""}`} rows={k === "review_date" || k === "signed_by" ? 1 : 2} maxLength={5000} disabled={ro || ((k === "dpo_advice" || k === "signed_by") && !signoff)} className={`${inputCls} w-full disabled:opacity-60`}
-            defaultValue={act[k] ?? ""} onBlur={(e) => e.target.value !== (act[k] ?? "") && save({ [k]: e.target.value }).catch(() => { e.target.value = act[k] ?? ""; })} /></label>)}
+          {k === "signed_by" && act.signed_at && <span className="mb-1 block text-xs text-muted-foreground">{t.signedOn} {act.signed_at}</span>}
+          {k === "review_date" ? <input key={`${k}:${act[k] ?? ""}`} type="date" disabled={ro} className={`${inputCls} w-48`} defaultValue={act[k] ?? ""} onBlur={(e) => e.target.value !== (act[k] ?? "") && save({ [k]: e.target.value }).catch(() => { e.target.value = act[k] ?? ""; })} />
+          : <textarea key={`${k}:${act[k] ?? ""}`} rows={k === "signed_by" ? 1 : 2} maxLength={5000} disabled={ro || ((k === "dpo_advice" || k === "signed_by") && !signoff)} className={`${inputCls} w-full disabled:opacity-60`}
+            defaultValue={act[k] ?? ""} onBlur={(e) => e.target.value !== (act[k] ?? "") && save({ [k]: e.target.value }).catch(() => { e.target.value = act[k] ?? ""; })} />}</label>)}
         <label className="flex items-center gap-2 text-sm"><input key={`cb${act.cross_border}`} type="checkbox" defaultChecked={!!act.cross_border} onChange={(e) => save({ cross_border: e.target.checked ? 1 : 0 })} />{t.crossBorder}</label></Card>
       <Card data-tour="risks" className="space-y-4"><h2 className="font-medium">{t.risksH}</h2>
         {risks.map((r, n) => <RiskBlock key={r.id} r={r} first={n === 0} t={t} reload={() => { loadRisks().catch(() => {}); reload(); }} />)}
@@ -230,6 +234,7 @@ function RiskBlock({ r, first, t, reload }: { r: RiskData; first: boolean; t: T;
     <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{r.title}</span>{r.confirmed === 0 && <><Badge tone="amber">{t.comp.draft}</Badge><button type="button" className="text-xs underline" onClick={async () => { await api(`/api/risks/${r.id}/confirm`, "POST"); reload(); }}>{t.comp.confirm}</button></>}<span data-tour={first ? "risk-badges" : undefined} className="inline-flex items-center gap-1"><Badge tone={tone}>{n}</Badge>→<Badge tone={rt}>{rn}</Badge></span>
       <label className="ml-auto text-xs">{t.resL}<input key={`rl${r.residual_likelihood}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_likelihood ?? ""} onBlur={(e) => e.target.value && setRes("residual_likelihood", clamp(e.target.value))} /></label>
       <label className="text-xs">{t.resS}<input key={`rs${r.residual_severity}`} type="number" min={1} max={4} className={`${inputCls} ml-1 w-16`} defaultValue={r.residual_severity ?? ""} onBlur={(e) => e.target.value && setRes("residual_severity", clamp(e.target.value))} /></label></div>
+    {r.residual_likelihood === null && r.residual_severity === null && <p className="mt-1 text-xs text-muted-foreground">{t.resHint}</p>}
     <ul data-tour={first ? "controls-first" : undefined} className="my-2 space-y-1 text-sm">{r.controls.map((k) => <li key={k.id} className="flex flex-wrap items-center gap-2">
       <select className="rounded-md border bg-background px-1 text-xs" value={k.status} onChange={async (e) => { await api(`/api/controls/${k.id}`, "PATCH", { status: e.target.value }); reload(); }}>
         {["planned", "in-progress", "done"].map((s) => <option key={s}>{s}</option>)}</select>{k.title}
