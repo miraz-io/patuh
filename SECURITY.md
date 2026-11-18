@@ -39,7 +39,7 @@ State is lost on restart. For anything stricter use a reverse proxy or a shared 
 
 - Listen on localhost, or put HTTPS in front and set `PATUH_PUBLIC_URL` to the https address.
 - Set `PATUH_TRUST_PROXY=1` **only** behind a trusted reverse proxy that sets or overwrites `X-Forwarded-For`. If the
-  app is reachable directly, anyone could forge that header and dodge the sign-in limits.
+  app is reachable directly, anyone could forge that header and dodge the sign-in limits. The app uses the last `X-Forwarded-For` entry, so with two proxies in a row make the outer one overwrite the header.
 - Back up the database together with `patuh.key` (or keep `PATUH_SECRET` safe); without it the stored AI key cannot be read.
 - Process data and questions go to the AI provider you configure. Choose one that fits your own rules, or host a model yourself.
 - Sign-in throttling is in memory: run one server process, or add a shared store.

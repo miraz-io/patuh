@@ -61,10 +61,10 @@ Admins open **Settings** and enter any OpenAI-compatible service that supports t
 
 | Source | Text | Checked against the official source |
 |---|---|---|
-| UU 27/2022 (selected articles) | official wording | yes |
-| GDPR (selected articles and recitals) | official wording | yes |
-| EU AI Act (selected articles, Annex III headings) | official wording | yes |
-| NIST AI RMF 1.0 | official wording | yes |
+| UU 27/2022 (selected articles) | official wording | yes (sample only, see `library/VERIFIED.md`) |
+| GDPR (selected articles and recitals) | official wording | yes (sample only, see `library/VERIFIED.md`) |
+| EU AI Act (selected articles, Annex III headings) | official wording | yes (sample only, see `library/VERIFIED.md`) |
+| NIST AI RMF 1.0 | official wording | yes (sample only, see `library/VERIFIED.md`) |
 | ISO/IEC 27001, 27701, 42001 | clause IDs and short own-words labels only (the standards are copyrighted) | no |
 | PP 33/2026 | **not included**: it was reported as issued in July 2026, but no official text could be fetched. Add it by dropping the official text into `library/` in the same format. | n/a |
 

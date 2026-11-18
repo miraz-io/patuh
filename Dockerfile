@@ -11,4 +11,5 @@ RUN mkdir /data && chown node:node /data
 VOLUME /data
 EXPOSE 8080
 USER node
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
 CMD ["npm", "start"]

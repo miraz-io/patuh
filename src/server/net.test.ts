@@ -15,7 +15,7 @@ describe("outbound address guard", () => {
       expect(embeddedV4(a), a).toBe("169.254.169.254");
   });
   it("blocks link-local, metadata and trailing-dot hosts, allows loopback and LAN", () => {
-    for (const u of ["http://169.254.169.254/", "http://[fe80::1]/", "http://[febf::1]/", "http://[fd00:ec2::254]/", "http://metadata.google.internal./v1", "http://[::ffff:169.254.169.254]/",
+    for (const u of ["http://169.254.169.254/", "http://168.63.129.16/", "http://[fe80::1]/", "http://[febf::1]/", "http://[fd00:ec2::254]/", "http://metadata.google.internal./v1", "http://[::ffff:169.254.169.254]/",
       "http://[64:ff9b::a9fe:a9fe]/", "http://100.100.100.200/", "http://2852039166/"]) expect(aiUrlProblem(u), u).not.toBeNull();
     for (const u of ["http://127.0.0.1:11434/v1", "http://localhost/v1", "http://192.168.1.5/v1", "https://api.openai.com/v1", "http://[::1]/v1"]) expect(aiUrlProblem(u), u).toBeNull();
     expect(addrProblem("fec0::1")).toBeNull(); // site-local is not link-local

@@ -32,8 +32,8 @@ export function App() {
   const [tour, setTour] = useState<Tour | null>(null);
   const t = TXT[lang];
   useEffect(() => { try { localStorage.setItem("patuh_lang", lang); } catch { /* storage blocked */ } }, [lang]);
-  useEffect(() => window.scrollTo(0, 0), [page, open]); // a new screen starts at the top
-  useEffect(() => setError(""), [page, open, me?.user.id]); // an error belongs to the screen where it happened
+  useEffect(() => { window.scrollTo(0, 0); }, [page, open]); // a new screen starts at the top
+  useEffect(() => { setError(""); }, [page, open, me?.user.id]); // an error belongs to the screen where it happened
 
   const loadMe = useCallback(() => api<Me>("/api/auth/me").then(setMe).catch(() => setMe(null)), []);
   const load = useCallback(async () => {

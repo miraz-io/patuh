@@ -26,7 +26,7 @@ export function TourPlayer({ tour, lang, show, onClose }: { tour: Tour; lang: La
   const autoRef = useRef(false); autoRef.current = auto;
   const el = useRef<HTMLElement | null>(null);
   const iRef = useRef(0); iRef.current = i;
-  useEffect(() => setMissing(false), [i]);
+  useEffect(() => { setMissing(false); }, [i]);
 
   const go = useCallback((n: number) => {
     if (n < 0) return;

@@ -32,7 +32,7 @@ export function embeddedV4(a: string): string | null {
 /** Problem text for an IP literal that must never be an outbound target: link-local, cloud metadata. Private LAN and loopback stay allowed (Ollama, vLLM). */
 export function addrProblem(a: string): string | null {
   const v4 = embeddedV4(a);
-  if (v4 && (v4.startsWith("169.254.") || v4 === "100.100.100.200")) return BLOCKED;
+  if (v4 && (v4.startsWith("169.254.") || v4 === "100.100.100.200" || v4 === "168.63.129.16")) return BLOCKED;
   const g = v6Groups(a);
   if (g && ((g[0] & 0xffc0) === 0xfe80 || (g[0] === 0xfd00 && g[1] === 0x0ec2 && g.slice(2, 7).every((v) => v === 0) && g[7] === 0x254))) return BLOCKED;
   return null;
