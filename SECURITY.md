@@ -4,7 +4,7 @@ Patuh handles compliance records that can describe personal data, so please repo
 
 ## Reporting a vulnerability
 
-Email **rino@miraz.id** with what you found, how to reproduce it and the version. Please do not open a public issue
+Email **support@miraz.id** with what you found, how to reproduce it and the version. Please do not open a public issue
 for a vulnerability. You will get an answer within a few working days. This is a small project without a bug bounty;
 we credit reporters who want it.
 
