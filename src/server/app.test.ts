@@ -275,7 +275,7 @@ describe("security hardening", () => {
     const { app } = await setup();
     for (let i = 0; i < 30; i++) await from(app, "203.0.113.9", `u${i}@x.id`, "wrong wrong wrong");
     expect((await from(app, "203.0.113.9", "fresh@x.id", "wrong wrong wrong")).status).toBe(429);
-  });
+  }, 30_000); // 30 scrypt checks
   it("logs exports and searches in the audit trail without the search text", async () => {
     const { app, db, hr } = await setup();
     const { cookie } = await login(app, "admin@x.id");
